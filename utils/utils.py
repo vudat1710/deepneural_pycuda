@@ -6,17 +6,15 @@ from pycuda.tools import context_dependent_memoize, dtype_to_ctype
 from pycuda.compiler import SourceModule
 import pycuda.driver as drv
 from string import Template
-from ..tensor import Tensor
+from tensor import Tensor
 from skcuda import cublas
 import numbers
 import numpy as np
 from typing import Tuple
 
-
 global _global_cublas_allocator, _global_cublas_handle
 _global_cublas_allocator = drv.mem_alloc
 _global_cublas_handle = cublas.cublasCreate()
-
 
 
 def _get_binaryop_vecmat_kernel(dtype: np.dtype, binary_op: str) -> Tuple[SourceModule, SourceModule]:
@@ -68,7 +66,8 @@ def _get_binaryop_vecmat_kernel(dtype: np.dtype, binary_op: str) -> Tuple[Source
     return add_row_vec_kernel, add_col_vec_kernel
 
 
-def binaryop_matvec(binary_op: str, x_gpu: Tensor, a_gpu: Tensor, axis: int = None, out: Tensor = None, stream: drv.Stream = None) -> Tensor:
+def binaryop_matvec(binary_op: str, x_gpu: Tensor, a_gpu: Tensor, axis: int = None, out: Tensor = None,
+                    stream: drv.Stream = None) -> Tensor:
     """
     Applies a binary operation to a vector and each column/row of a matrix.
 
@@ -142,24 +141,25 @@ def binaryop_matvec(binary_op: str, x_gpu: Tensor, a_gpu: Tensor, axis: int = No
         if axis == 0:
             col_kernel(x_gpu, a_gpu, out, n, m,
                        block=block, grid=grid, stream=stream,
-                       shared=24*x_gpu.dtype.itemsize)
+                       shared=24 * x_gpu.dtype.itemsize)
         elif axis == 1:
             row_kernel(x_gpu, a_gpu, out, n, m,
                        block=block, grid=grid, stream=stream,
-                       shared=24*x_gpu.dtype.itemsize)
+                       shared=24 * x_gpu.dtype.itemsize)
     else:
         if axis == 0:
             row_kernel(x_gpu, a_gpu, out, m, n,
                        block=block, grid=grid, stream=stream,
-                       shared=24*x_gpu.dtype.itemsize)
+                       shared=24 * x_gpu.dtype.itemsize)
         elif axis == 1:
             col_kernel(x_gpu, a_gpu, out, m, n,
                        block=block, grid=grid, stream=stream,
-                       shared=24*x_gpu.dtype.itemsize)
+                       shared=24 * x_gpu.dtype.itemsize)
     return out
 
 
-def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', transb: str = 'N', alpha: float = 1.0, beta: float = 1.0, handle: int =None) -> Tensor:
+def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', transb: str = 'N', alpha: float = 1.0,
+            beta: float = 1.0, handle: int = None) -> Tensor:
     """
     Calculates the dot product of two arrays and adds it to a third matrix.
 
@@ -210,19 +210,19 @@ def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', tran
         b_shape = (1, b_shape[0])
 
     # Perform matrix multiplication for 2D arrays:
-    if (a_gpu.dtype == np.complex64 and b_gpu.dtype == np.complex64):
+    if a_gpu.dtype == np.complex64 and b_gpu.dtype == np.complex64:
         cublas_func = cublas.cublasCgemm
         alpha = np.complex64(alpha)
         beta = np.complex64(beta)
-    elif (a_gpu.dtype == np.float32 and b_gpu.dtype == np.float32):
+    elif a_gpu.dtype == np.float32 and b_gpu.dtype == np.float32:
         cublas_func = cublas.cublasSgemm
         alpha = np.float32(alpha)
         beta = np.float32(beta)
-    elif (a_gpu.dtype == np.complex128 and b_gpu.dtype == np.complex128):
+    elif a_gpu.dtype == np.complex128 and b_gpu.dtype == np.complex128:
         cublas_func = cublas.cublasZgemm
         alpha = np.complex128(alpha)
         beta = np.complex128(beta)
-    elif (a_gpu.dtype == np.float64 and b_gpu.dtype == np.float64):
+    elif a_gpu.dtype == np.float64 and b_gpu.dtype == np.float64:
         cublas_func = cublas.cublasDgemm
         alpha = np.float64(alpha)
         beta = np.float64(beta)
@@ -255,7 +255,7 @@ def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', tran
             l, n = b_shape
         else:
             raise ValueError('invalid value for transb')
-        
+
         if l != k:
             raise ValueError('objects are not aligned')
 
@@ -266,7 +266,7 @@ def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', tran
         if c_gpu.shape != (m, n) or c_gpu.dtype != a_gpu.dtype:
             raise ValueError('invalid value for c_gpu')
         cublas_func(handle, transa, transb, m, n, k, alpha, a_gpu.gpudata,
-                lda, b_gpu.gpudata, ldb, beta, c_gpu.gpudata, ldc)
+                    lda, b_gpu.gpudata, ldb, beta, c_gpu.gpudata, ldc)
     else:
         if transb in ['t', 'c']:
             m, k = b_shape
@@ -294,10 +294,12 @@ def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', tran
         if c_gpu.shape != (n, m) or c_gpu.dtype != a_gpu.dtype:
             raise ValueError('invalid value for c_gpu')
         cublas_func(handle, transb, transa, m, n, k, alpha, b_gpu.gpudata,
-                ldb, a_gpu.gpudata, lda, beta, c_gpu.gpudata, ldc)
+                    ldb, a_gpu.gpudata, lda, beta, c_gpu.gpudata, ldc)
     return c_gpu
 
-def dot(x_gpu: Tensor, y_gpu: Tensor, transa: str = 'N', transb: str = 'N', handle: int = None, out: Tensor = None):
+
+def dot(x_gpu: Tensor, y_gpu: Tensor, transa: str = 'N', transb: str = 'N', handle: int = None,
+        out: Tensor = None) -> Tensor:
     """
     Dot product of two arrays.
 
@@ -409,7 +411,7 @@ def dot(x_gpu: Tensor, y_gpu: Tensor, transa: str = 'N', transb: str = 'N', hand
                 l, n = y_shape
 
             alloc = _global_cublas_allocator
-            if x_gpu.strides[1] > x_gpu.strides[0]: # F order
+            if x_gpu.strides[1] > x_gpu.strides[0]:  # F order
                 out = gpuarray.empty((m, n), x_gpu.dtype, order="F", allocator=alloc)
             else:
                 out = gpuarray.empty((m, n), x_gpu.dtype, order="C", allocator=alloc)
@@ -489,6 +491,7 @@ def transpose(a_gpu: Tensor, conj: bool = False, handle: int = None) -> Tensor:
          at_gpu.gpudata, M)
     return at_gpu
 
+
 def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_alloc):
     """
     Return an array of the given shape and dtype filled with ones.
@@ -516,7 +519,9 @@ def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_allo
     out.fill(o)
     return out
 
-def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool = False, calc_mean: bool = False, ddof: int = 0) -> Tensor:
+
+def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool = False, calc_mean: bool = False,
+            ddof: int = 0) -> Tensor:
     """
     Compute the sum along the specified axis.
 
@@ -542,11 +547,11 @@ def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool 
     assert isinstance(ddof, numbers.Integral)
 
     if axis is None or len(x_gpu.shape) <= 1:
-        out_shape = (1,)*len(x_gpu.shape) if keepdims else ()
+        out_shape = (1,) * len(x_gpu.shape) if keepdims else ()
         if calc_mean == False:
             return gpuarray.sum(x_gpu).reshape(out_shape)
         else:
-            return gpuarray.sum(x_gpu).reshape(out_shape) / (x_gpu.dtype.type(x_gpu.size-ddof))
+            return gpuarray.sum(x_gpu).reshape(out_shape) / (x_gpu.dtype.type(x_gpu.size - ddof))
 
     if axis < 0:
         axis += 2
@@ -565,20 +570,20 @@ def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool 
         sum_axis, out_axis = (n, m) if axis == 0 else (m, n)
 
     if calc_mean:
-        alpha = (1.0 / (sum_axis-ddof))
+        alpha = (1.0 / (sum_axis - ddof))
     else:
         alpha = 1.0
-    if (x_gpu.dtype == np.complex64):
+    if x_gpu.dtype == np.complex64:
         gemv = cublas.cublasCgemv
-    elif (x_gpu.dtype == np.float32):
+    elif x_gpu.dtype == np.float32:
         gemv = cublas.cublasSgemv
-    elif (x_gpu.dtype == np.complex128):
+    elif x_gpu.dtype == np.complex128:
         gemv = cublas.cublasZgemv
-    elif (x_gpu.dtype == np.float64):
+    elif x_gpu.dtype == np.float64:
         gemv = cublas.cublasDgemv
 
     alloc = _global_cublas_allocator
-    ons = ones((sum_axis, ), x_gpu.dtype, allocator=alloc)
+    ons = ones((sum_axis,), x_gpu.dtype, allocator=alloc)
 
     if keepdims:
         out_shape = (1, out_axis) if axis == 0 else (out_axis, 1)
@@ -596,7 +601,8 @@ def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool 
          ons.gpudata, 1, 0.0, out.gpudata, 1)
     return out
 
-if __name__=="__main__":
-    mat1 = gpuarray.to_gpu(np.random.rand(1,5).astype(np.float32))
-    mat2 = gpuarray.to_gpu(np.random.rand(5,1).astype(np.float32))
+
+if __name__ == "__main__":
+    mat1 = gpuarray.to_gpu(np.random.rand(1, 5).astype(np.float32))
+    mat2 = gpuarray.to_gpu(np.random.rand(5, 1).astype(np.float32))
     print(transpose(mat1))

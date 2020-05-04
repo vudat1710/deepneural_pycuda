@@ -1,10 +1,16 @@
-from ..tensor import Tensor
-from ..utils.activation import *
-from ..utils.utils import *
+from tensor import Tensor
+from utils.activation import *
+from utils.utils import *
 from typing import Dict, Tuple
 from pycuda import gpuarray
 
-def lstm_cell_forward(xt: Tensor, a_prev: Tensor, c_prev: Tensor, parameters: Dict) -> Tuple[Tensor, Tensor, Tensor, Tuple]:
+
+def lstm_cell_forward(
+        xt: Tensor,
+        a_prev: Tensor,
+        c_prev: Tensor,
+        parameters: Dict
+) -> Tuple[Tensor, Tensor, Tensor, Tuple]:
     # Retrieve parameters from "parameters"
     Wf = parameters["Wf"]
     bf = parameters["bf"]
@@ -24,7 +30,6 @@ def lstm_cell_forward(xt: Tensor, a_prev: Tensor, c_prev: Tensor, parameters: Di
     concat[: n_a, :] = a_prev
     concat[n_a:, :] = xt
 
-
     # Compute values for ft, it, cct, c_next, ot, a_next
     a1 = binaryop_matvec('+', dot(Wf, concat), bf)
     a2 = bia1 = binaryop_matvec('+', dot(Wi, concat), bi)
@@ -36,7 +41,6 @@ def lstm_cell_forward(xt: Tensor, a_prev: Tensor, c_prev: Tensor, parameters: Di
     cct = tanh_gpu(a3)
     ot = sigmoid_gpu(a4)
 
-
     c_next = ft * c_prev + it * cct
     a_next = ot * tanh_gpu(c_next)
 
@@ -47,6 +51,7 @@ def lstm_cell_forward(xt: Tensor, a_prev: Tensor, c_prev: Tensor, parameters: Di
     cache = (a_next, c_next, a_prev, c_prev, ft, it, cct, ot, xt, parameters)
 
     return a_next, c_next, yt_pred, cache
+
 
 def lstm_cell_backward(da_next: Tensor, dc_next: Tensor, cache: Tuple) -> Dict[str, Tensor]:
     # Retrieve information from "cache"
@@ -63,8 +68,8 @@ def lstm_cell_backward(da_next: Tensor, dc_next: Tensor, cache: Tuple) -> Dict[s
     dft = (dc_next * c_prev + ot * (1 - square_gpu(tanh_gpu(c_next))) * c_prev * da_next) * ft * (1 - ft)
 
     concat = pycuda.gpuarray.empty(((n_a + n_x), m), dtype=np.float64)
-    concat[:n_a,:] = a_prev
-    concat[n_a:,:] = xt
+    concat[:n_a, :] = a_prev
+    concat[n_a:, :] = xt
 
     # Compute parameters related derivatives. Use equations (11)-(14) (≈8 lines)
     dWf = dot(dft, transpose(concat))
@@ -77,7 +82,7 @@ def lstm_cell_backward(da_next: Tensor, dc_next: Tensor, cache: Tuple) -> Dict[s
     dbo = sum_gpu(dot, axis=1, keepdims=True)
 
     # Compute derivatives w.r.t previous hidden state, previous memory state and input.
-    da_prev = dot(transpose(parameters['Wf'][:, :n_a]), dft) + dot(transpose(parameters['Wi'][:, :n_a]),dit) + dot(
+    da_prev = dot(transpose(parameters['Wf'][:, :n_a]), dft) + dot(transpose(parameters['Wi'][:, :n_a]), dit) + dot(
         transpose(parameters['Wc'][:, :n_a]), dcct) + dot(transpose(parameters['Wo'][:, :n_a]), dot)
     dc_prev = dc_next * ft + ot * from_one_gpu(square_gpu(tanh_gpu(c_next))) * ft * da_next
     dxt = dot(transpose(parameters['Wf'][:, n_a:]), dft) + dot(transpose(parameters['Wi'][:, n_a:]), dit) + dot(

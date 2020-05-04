@@ -516,7 +516,7 @@ def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_allo
     out.fill(o)
     return out
 
-def sum(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool = False, calc_mean: bool = False, ddof: int = 0) -> Tensor:
+def sum_gpu(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool = False, calc_mean: bool = False, ddof: int = 0) -> Tensor:
     """
     Compute the sum along the specified axis.
 

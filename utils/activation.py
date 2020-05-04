@@ -4,7 +4,7 @@ import pycuda.cumath
 import pycuda.gpuarray
 from pycuda.reduction import ReductionKernel
 from pycuda.elementwise import ElementwiseKernel
-from deepneural_pycuda.tensor import Tensor
+from ..tensor import Tensor
 from numpy import ndarray
 
 # GPU Support

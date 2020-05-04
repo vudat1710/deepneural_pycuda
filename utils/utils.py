@@ -6,10 +6,11 @@ from pycuda.tools import context_dependent_memoize, dtype_to_ctype
 from pycuda.compiler import SourceModule
 import pycuda.driver as drv
 from string import Template
-from deepneural_pycuda.tensor import Tensor
+from ..tensor import Tensor
 from skcuda import cublas
 import numbers
 import numpy as np
+from typing import Tuple
 
 
 global _global_cublas_allocator, _global_cublas_handle
@@ -18,7 +19,7 @@ _global_cublas_handle = cublas.cublasCreate()
 
 
 
-def _get_binaryop_vecmat_kernel(dtype: np.dtype, binary_op: str) -> (SourceModule, SourceModule):
+def _get_binaryop_vecmat_kernel(dtype: np.dtype, binary_op: str) -> Tuple[SourceModule, SourceModule]:
     template = Template("""
     #include <pycuda-complex.hpp>
 
@@ -254,7 +255,7 @@ def add_dot(a_gpu: Tensor, b_gpu: Tensor, c_gpu: Tensor, transa: str = 'N', tran
             l, n = b_shape
         else:
             raise ValueError('invalid value for transb')
-
+        
         if l != k:
             raise ValueError('objects are not aligned')
 
@@ -594,3 +595,8 @@ def sum(x_gpu: Tensor, axis: int = None, out: Tensor = None, keepdims: bool = Fa
          alpha, x_gpu.gpudata, lda,
          ons.gpudata, 1, 0.0, out.gpudata, 1)
     return out
+
+if __name__=="__main__":
+    mat1 = gpuarray.to_gpu(np.random.rand(1,5).astype(np.float32))
+    mat2 = gpuarray.to_gpu(np.random.rand(5,1).astype(np.float32))
+    print(transpose(mat1))

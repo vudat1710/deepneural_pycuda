@@ -15,16 +15,16 @@ def lstm_forward(x: Tensor, a0: Tensor, parameters: Dict[str, Tensor]) -> Tuple[
     n_a, n_t = parameters['Wf'].shape
 
     # initialize "a", "c" and "y" with zeros (≈3 lines)
-    a = pycuda.gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
-    c = pycuda.gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
-    y = pycuda.gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
+    a = gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
+    c = gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
+    y = gpuarray.zeros((n_a, m, T_x), dtype=np.float64)
 
     # Initialize a_next and c_next (≈2 lines)
-    a_next = pycuda.gpuarray.to_gpu(a0)
-    c_next = pycuda.gpuarray.zeros((n_a, m), dtype=np.float64)
+    a_next = gpuarray.to_gpu(a0)
+    c_next = gpuarray.zeros((n_a, m), dtype=np.float64)
 
     # transfer X to gpu
-    x_gpu = pycuda.gpuarray.to_gpu(x)
+    x_gpu = gpuarray.to_gpu(x)
 
     # loop over all time-steps
     for t in range(T_x):
@@ -55,23 +55,23 @@ def lstm_backward_gpu(da: Tensor, caches: Tuple) -> Dict[str, Tensor]:
     n_x, m = x1.shape
 
     # initialize the gradients with the right sizes (≈12 lines)
-    dx = pycuda.gpuarray.zeros((n_x, m, T_x), dtype=np.float64)
-    da0 = pycuda.gpuarray.zeros((n_a, m), dtype=np.float64)
-    da_prevt = pycuda.gpuarray.zeros(da0.shape, dtype=np.float64)
-    dc_prevt = pycuda.gpuarray.zeros(da0.shape, dtype=np.float64)
-    dWf = pycuda.gpuarray.zeros((n_a, n_a + n_x), dtype=np.float64)
-    dWi = pycuda.gpuarray.zeros(dWf.shape, dtype=np.float64)
-    dWc = pycuda.gpuarray.zeros(dWf.shape, dtype=np.float64)
-    dWo = pycuda.gpuarray.zeros(dWf.shape, dtype=np.float64)
-    dbf = pycuda.gpuarray.zeros((n_a, 1), dtype=np.float64)
-    dbi = pycuda.gpuarray.zeros(dbf.shape, dtype=np.float64)
-    dbc = pycuda.gpuarray.zeros(dbf.shape, dtype=np.float64)
-    dbo = pycuda.gpuarray.zeros(dbf.shape, dtype=np.float64)
+    dx = gpuarray.zeros((n_x, m, T_x), dtype=np.float64)
+    da0 = gpuarray.zeros((n_a, m), dtype=np.float64)
+    da_prevt = gpuarray.zeros(da0.shape, dtype=np.float64)
+    dc_prevt = gpuarray.zeros(da0.shape, dtype=np.float64)
+    dWf = gpuarray.zeros((n_a, n_a + n_x), dtype=np.float64)
+    dWi = gpuarray.zeros(dWf.shape, dtype=np.float64)
+    dWc = gpuarray.zeros(dWf.shape, dtype=np.float64)
+    dWo = gpuarray.zeros(dWf.shape, dtype=np.float64)
+    dbf = gpuarray.zeros((n_a, 1), dtype=np.float64)
+    dbi = gpuarray.zeros(dbf.shape, dtype=np.float64)
+    dbc = gpuarray.zeros(dbf.shape, dtype=np.float64)
+    dbo = gpuarray.zeros(dbf.shape, dtype=np.float64)
 
     gradients = {}
     # loop back over the whole sequence
     for t in reversed(range(T_x)):
-        da_gpu = pycuda.gpuarray.to_gpu(da[:, :, t])
+        da_gpu = gpuarray.to_gpu(da[:, :, t])
         # Compute all gradients using lstm_cell_backward
         gradients = lstm_cell_backward(da_gpu, dc_prevt, caches[t])
         # Store or add the gradient to the parameters' previous step's gradient
@@ -113,7 +113,7 @@ def layer_to_gpu(parameters: dict) -> Tensor:
     """
     gpu_params = {}
     for parameter in parameters.items():
-        gpu_params[parameter[0]] = pycuda.gpuarray.to_gpu(parameter[1])
+        gpu_params[parameter[0]] = gpuarray.to_gpu(parameter[1])
 
     del parameters
     return gpu_params
@@ -127,7 +127,7 @@ def layer_to_gpu_async(parameters: dict, stream: drv.Stream) -> Tensor:
     """
     gpu_params = {}
     for parameter in parameters.items():
-        gpu_params[parameter[0]] = pycuda.gpuarray.to_gpu_async(parameter[1], stream=stream)
+        gpu_params[parameter[0]] = gpuarray.to_gpu_async(parameter[1], stream=stream)
 
     return gpu_params
 

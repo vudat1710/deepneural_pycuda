@@ -4,7 +4,6 @@
 
 from numpy import ndarray
 import numpy as np
-from tensorflow.python.ops import gen_math_ops
 
 
 def BCEWithLogits(predicted: ndarray, target: ndarray) -> ndarray:

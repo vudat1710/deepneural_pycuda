@@ -1,4 +1,5 @@
 from utils.utils import *
+from utils.activation import *
 from loss import BCEWithLogits
 
 
@@ -17,6 +18,32 @@ def test_bce_loss():
     print(loss_)
 
 
+def test_sum():
+    x = gpuarray.to_gpu(np.array([
+        [1, 2, 3, 4],
+        [5, 6, 7, 8],
+        [1, 5, 2, 7],
+    ], dtype=np.float32))
+    sum_1 = sum_gpu(x, axis=1, keepdims=True)
+    print(sum_1.get())
+
+
+def test_sigmoid():
+    x_cpu = np.array([1, 2, 3], dtype=np.float64)
+    x_gpu = gpuarray.to_gpu(x_cpu)
+    print(sigmoid_gpu(x_gpu))
+    print(sigmoid(x_cpu))
+
+
+def test_softmax():
+    x_cpu = np.array([[1, 2, 3], [1, 2, 3]], dtype=np.float64)
+    x_gpu = gpuarray.to_gpu(x_cpu)
+    print(softmax_gpu(x_gpu))
+
+
 if __name__ == '__main__':
-    test_utils()
+    # test_utils()
     # test_bce_loss()
+    # test_sum()
+    # test_sigmoid()
+    test_softmax()

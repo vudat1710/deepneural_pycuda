@@ -79,6 +79,8 @@ class Tensor:
                 self.grad = grad
             else:
                 self.grad += grad
+                # if hasattr(grad, 'is_index_select') and grad.is_index_select:
+                #     self.grad.selected_indices = grad.selected_indices
 
             # grads must not have grads of their own
             assert grad.autograd is False
@@ -122,10 +124,10 @@ class Tensor:
                     self.creators[0].backward(self.grad * (ones_ - (self * self)))
                 elif self.creator_op == "index_select":
                     new_grad = self.zeros_like(self.creators[0])
-                    indices_ = self.__getattribute__("index_select_indices").data.flatten()
-                    grad_ = grad.data.reshape(len(indices_), -1)
+                    indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
+                    grad_ = grad.reshape((len(indices_), -1))
                     for i in range(len(indices_)):
-                        new_grad[indices_[i]] += grad_[i]
+                        new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
                     self.creators[0].backward(new_grad)
                 elif self.creator_op == "cross_entropy":
                     dx = self.__getattribute__("softmax_output") - self.__getattribute__("target_dist")
@@ -319,15 +321,15 @@ class Tensor:
         )
 
     def index_select(self, indices, device=None):
-        # assert self.device == 'cpu'
         if indices.device == 'cuda':
-            indices = indices.cpu().astype(np.int32)
+            indices = indices.cpu().astype(np.int)
         else:
             indices = indices.astype(np.int32)
-        # if self.device == 'cuda':
-        #     data = gpuarray.to_gpu(self.data[indices.data])
-        # else:
-        data = self.data[indices.data]
+        if self.device == 'cuda':
+            # data = gpuarray.to_gpu(self.data[indices.data])
+            data = self._index_select_cuda(indices.data.tolist())
+        else:
+            data = self.data[indices.data]
         if self.autograd:
             new = Tensor(
                 # data=self.data[indices.data],
@@ -339,7 +341,13 @@ class Tensor:
             )
             new.index_select_indices = indices
             return new
-        return Tensor(data=data, device=self.device if device is None else device, )
+        return Tensor(data=data, autograd=True, device=self.device if device is None else device, )
+
+    def _index_select_cuda(self, indices):
+        data = gpuarray.empty(shape=(len(indices), *self.shape[1:]), dtype=self.dtype)
+        for i, index in enumerate(indices):
+            gpuarray._memcpy_discontig(dst=data[i], src=self.data[index])
+        return data
 
     def softmax(self):
         if self.device == 'cuda':
@@ -393,32 +401,48 @@ class Tensor:
         return self
 
     def __getitem__(self, i):
-        assert 0 <= i < self.data.shape[0], 'out of index'
+        # assert 0 <= i < self.data.shape[0], 'out of index'
         return Tensor(
             data=self.data[i],
             autograd=self.autograd,
             device=self.device,
         )
 
+    def __setitem__(self, index, value):
+        assert 0 <= index < self.data.shape[0], 'out of index'
+        assert tuple(self.shape[1:]) == value.shape
+        assert self.device == value.device
+        self.data[index] = value.data
+
     def cpu(self):
         if self.device == 'cuda':
-            return Tensor(
+            data = Tensor(
                 data=self.data.get(),
                 autograd=self.autograd,
                 device='cpu',
             )
+            data.grad = self.grad.cpu() if self.grad is not None else None
+            return data
         else:
             return self
 
     def cuda(self):
         if self.device == 'cpu':
-            return Tensor(
+            data = Tensor(
                 data=gpuarray.to_gpu(self.data),
                 autograd=self.autograd,
                 device='cuda',
             )
+            data.grad = self.grad.cuda() if self.grad is not None else None
         else:
             return self
+
+    def to(self, device):
+        assert device in ['cuda', 'cpu']
+        if device == 'cuda':
+            return self.cuda()
+        else:
+            return self.cpu()
 
     def astype(self, d_type):
         self.data = self.data.astype(dtype=d_type)
@@ -490,7 +514,10 @@ class SGD:
 
     def step(self, zero=True):
         for p in self.parameters:
-            p.data -= p.grad.data * self.lr
+            # if hasattr(p.grad, 'selected_indices'):
+            #     p.data[p.grad.selected_indices] -= p.grad.to(p.device).data * self.lr
+            # else:
+            p.data -= p.grad.to(p.device).data * self.lr
             if zero:
                 p.grad.data *= 0
 
@@ -537,6 +564,9 @@ class Sequential(Layer):
             input = layer.forward(input)
         return input
 
+    def __call__(self, input):
+        return self.forward(input)
+
     def get_parameters(self):
         params = []
         for layer in self.layers:
@@ -555,13 +585,20 @@ class Embedding(Layer):
         self.weight = Tensor(
             data=(np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim,
             autograd=autograd,
-            device='cpu',
+            device=self.device,
         )
         if self.autograd:
             self.parameters.append(self.weight)
 
     def forward(self, input):
-        data = self.weight.index_select(input, device=self.device)
+        assert len(input.shape) in [1, 2]
+        if len(input.shape) == 1:
+            data = self.weight.index_select(input, device=self.device)
+        else:
+            data = [
+                self.weight.index_select(input[i], device=self.device)
+                for i in range(input.shape[0])
+            ]
         return data
 
     def __call__(self, input):
@@ -625,8 +662,6 @@ class LSTMCell(Layer):
         self.ho = Linear(n_inputs=hidden_dim, n_outputs=hidden_dim, bias=False, device=device)
         self.hc = Linear(n_inputs=hidden_dim, n_outputs=hidden_dim, bias=False, device=device)
 
-        self.w_ho = Linear(n_inputs=hidden_dim, n_outputs=output_dim, bias=False, device=device)
-
         self.parameters.extend([
             *self.xf.get_parameters(),
             *self.xi.get_parameters(),
@@ -636,7 +671,6 @@ class LSTMCell(Layer):
             *self.hi.get_parameters(),
             *self.ho.get_parameters(),
             *self.hc.get_parameters(),
-            *self.w_ho.get_parameters(),
         ])
 
     def forward(self, input, hidden=None):
@@ -651,8 +685,7 @@ class LSTMCell(Layer):
         u = (self.xc(input) + self.hc(prev_hidden)).tanh()
         c = (f * prev_cell) + (i * u)
         h = o * c.tanh()
-        output = self.w_ho(h)
-        return output, (h, c)
+        return h, c
 
     def __call__(self, input, hidden=None):
         return self.forward(input, hidden)

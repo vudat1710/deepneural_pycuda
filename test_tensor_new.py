@@ -1,4 +1,4 @@
-from model.tensor_new import Tensor, LSTMCell, Embedding
+from model.tensor_new import Tensor, LSTMCell, Embedding, CrossEntroyLoss, SGD
 import numpy as np
 import torch
 import torch.nn as nn
@@ -68,35 +68,58 @@ def test_backward():
 
 
 def test_index_select():
-    x_gpu = np.random.rand(10, 5)
-    x = Tensor(x_gpu, device='cpu', autograd=True)
+    x_cpu = np.random.rand(10, 5)
+    x = Tensor(x_cpu, device='cuda', autograd=True)
     indices = Tensor([1, 2, 3], device='cpu', d_type=np.int32)
     embs = x.index_select(indices)
+    print(x)
     print(embs)
-    # print(x_gpu[[1, 2, 3]])
+    # print(x_cpu[[1, 2, 3]])
+
+
+def test_get_item():
+    x_cpu = np.random.rand(10, 5, 5)
+    x = Tensor(x_cpu, device='cuda')
+    print(x[:, :, 1])
 
 
 def test_lstm_cell():
     embeddings = Embedding(
-        vocab_size=100,
+        vocab_size=10,
         embedding_dim=5,
         device='cuda',
-        autograd=False
+        autograd=True,
     )
     lstm_cell = LSTMCell(
         input_dim=5,
-        hidden_dim=8,
+        hidden_dim=100,
         output_dim=10,
         device='cuda',
     )
-    x = embeddings(Tensor([1, 2, 3], device='cpu'))
+    print('weight before backward')
+    print(embeddings.weight)
+
+    x = embeddings(Tensor([[1, 2, 3],
+                           [2, 3, 4]], device='cpu'))
+    print('x')
     print(x)
-    out, (h, c) = lstm_cell(x)
-    print(out)
-    print(h)
-    print(c)
-
-
+    hidden = None
+    for time_step in x:
+        hidden = lstm_cell(time_step, hidden=hidden)
+    target = Tensor([3, 5, 2], device='cpu', d_type=np.int32)
+    criterion = CrossEntroyLoss()
+    optimizer = SGD(parameters=[
+        *embeddings.get_parameters(),
+        *lstm_cell.get_parameters(),
+    ],
+        lr=0.01,
+    )
+    loss = criterion(hidden[0], target)
+    print('loss = ', loss)
+    loss.backward()
+    optimizer.step(zero=True)
+    print('weight after backward')
+    print(embeddings.weight)
 
 
 if __name__ == '__main__':
@@ -110,6 +133,9 @@ if __name__ == '__main__':
 
     # test index select
     # test_index_select()
+
+    # test get item
+    # test_get_item()
 
     # test lstm cell
     test_lstm_cell()

@@ -35,4 +35,4 @@ DEVICE = 'cuda'
 NUM_EPOCHS = 10
 
 # learning rate
-LR = 0.001
+LR = 0.005

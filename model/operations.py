@@ -6,6 +6,7 @@ import numbers
 import numpy as np
 from pycuda.reduction import ReductionKernel
 from pycuda.elementwise import ElementwiseKernel
+from pycuda.compiler import SourceModule
 from skcuda import misc, linalg
 
 _global_cublas_allocator = drv.mem_alloc
@@ -123,6 +124,110 @@ relu_grad_double_ker = ElementwiseKernel(
     operation="out[i] = (inp[i] > 0) ? 1 : 0",
     name="relu_grad_double_ker",
 )
+
+# random kernel
+random_1d_ker_template = """
+#include <curand_kernel.h>
+#define ULL unsigned long long
+extern "C" {
+    __global__ void random_1d_%(p)s_array(%(p)s *arr, float p) {
+    curandState cr_state; 
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
+
+    float x = curand_uniform(&cr_state);  
+    if (x < p) arr[tid] = 0;
+    else arr[tid] = 1;
+    return;
+    }
+}
+"""
+
+random_1d_int_func = SourceModule(
+    no_extern_c=True,
+    source=random_1d_ker_template % {'p': 'int'},
+).get_function('random_1d_int_array')
+
+random_1d_float_func = SourceModule(
+    no_extern_c=True,
+    source=random_1d_ker_template % {'p': 'float'},
+).get_function('random_1d_float_array')
+
+random_1d_double_func = SourceModule(
+    no_extern_c=True,
+    source=random_1d_ker_template % {'p': 'double'},
+).get_function('random_1d_double_array')
+
+# 2d
+
+random_2d_ker_template = """
+#include <curand_kernel.h>
+#define ULL unsigned long long
+extern "C" {
+    __global__ void random_2d_%(p)s_array(%(p)s *arr, int dim, float p) {
+    curandState cr_state; 
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    int tid = row * dim + col;
+    curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
+
+    float x = curand_uniform(&cr_state);  
+    if (x < p) arr[tid] = 0;
+    else arr[tid] = 1;
+    return;
+    }
+}
+"""
+
+random_2d_float_func = SourceModule(
+    no_extern_c=True,
+    source=random_2d_ker_template % {'p': 'float'}
+).get_function('random_2d_float_array')
+
+random_2d_int_func = SourceModule(
+    no_extern_c=True,
+    source=random_2d_ker_template % {'p': 'int'}
+).get_function('random_2d_int_array')
+
+random_2d_double_func = SourceModule(
+    no_extern_c=True,
+    source=random_2d_ker_template % {'p': 'double'}
+).get_function('random_2d_double_array')
+
+random_lstm_ker_template = """
+#include <curand_kernel.h>
+#define ULL unsigned long long
+extern "C" {
+    __global__ void random_lstm_%(p)s_array(%(p)s *array, int dim, float p) {
+    curandState cr_state; 
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    curand_init( (ULL) clock() + (ULL) row, (ULL) 0, (ULL) 0, &cr_state);
+    float x = curand_uniform(&cr_state);  
+    %(p)s v;
+    if (x < p) v = 0;
+    else v = 1;
+    for (int i = row * dim; i < (row + 1) * dim; i++) {
+        array[i] = v;
+    }
+    return;
+    }
+}
+"""
+
+random_lstm_int_func = SourceModule(
+    no_extern_c=True,
+    source=random_lstm_ker_template % {'p': 'int'}
+).get_function('random_lstm_int_array')
+
+random_lstm_float_func = SourceModule(
+    no_extern_c=True,
+    source=random_lstm_ker_template % {'p': 'float'}
+).get_function('random_lstm_float_array')
+
+random_lstm_double_func = SourceModule(
+    no_extern_c=True,
+    source=random_lstm_ker_template % {'p': 'double'}
+).get_function('random_lstm_double_array')
 
 
 def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_alloc):
@@ -335,6 +440,62 @@ def square_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
     return y
 
 
+random_ker = {
+    1: {
+        np.int32: random_1d_int_func,
+        np.float32: random_1d_float_func,
+        np.float64: random_1d_double_func,
+    },
+    2: {
+        np.int32: random_2d_int_func,
+        np.float32: random_2d_float_func,
+        np.float64: random_2d_double_func,
+    }
+}
+
+
+def dropout_mask_gpu(x: gpuarray.GPUArray, p=0.):
+    assert x.dtype in [np.int32, np.float32, np.float64], 'invalid dtype'
+    assert len(x.shape) in [1, 2], 'invalid number of dims'
+    mask = gpuarray.empty_like(x)
+    random_func = random_ker[len(x.shape)][x.dtype.type]
+    if len(x.shape) == 1:
+        random_func(mask, np.float32(p), block=(x.shape[0], 1, 1), grid=(1, 1, 1))
+    else:
+        # random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
+        random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(32, 32, 1), grid=(x.shape[0]//32, x.shape[1] // 32, 1))
+    return mask
+
+
+def get_mask_gpu(shape, dtype=np.float32, p=0.):
+    assert len(shape) in [1, 2], 'invalid number of dims'
+    mask = gpuarray.empty(shape=shape, dtype=dtype)
+    random_func = random_ker[len(shape)][dtype]
+    if len(shape) == 1:
+        random_func(mask, np.float32(p), block=(shape[0], 1, 1), grid=(1, 1, 1))
+    else:
+        # random_func(mask, np.int32(shape[1]), np.float32(p), block=(*shape, 1), grid=(1, 1, 1))
+        random_func(mask, np.int32(shape[1]), np.float32(p), block=(32, 32, 1), grid=(shape[0] // 32, shape[1] // 32, 1))
+    return mask
+
+
+lstm_ker = {
+    np.int32: random_lstm_int_func,
+    np.float32: random_lstm_float_func,
+    np.float64: random_lstm_double_func,
+}
+
+
+def dropout_mask_lstm_gpu(x: gpuarray.GPUArray, p=0.):
+    assert x.dtype in [np.int32, np.float32, np.float64], 'invalid dtype'
+    assert len(x.shape) == 2, 'x must have 2 dims'
+    mask = gpuarray.empty_like(x)
+    lstm_func = lstm_ker[x.dtype.type]
+    # lstm_func(mask, np.int32(x.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
+    lstm_func(mask, np.int32(x.shape[1]), np.float32(p), block=(32, 32, 1), grid=(x.shape[0]//32, x.shape[1]//32, 1))
+    return mask
+
+
 # def from_one_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
 #     ctype = 'float' if x.dtype == np.float32 else 'double'
 #     from_one = ElementwiseKernel(
@@ -375,3 +536,19 @@ def softmax(x: np.ndarray) -> np.ndarray:
         exps = np.exp(x[:, i] - np.max(x[:, i]))
         smax[:, i] = exps / np.sum(exps)
     return smax
+
+
+def dropout_mask(x: np.ndarray, p=0.):
+    mask = np.random.choice([0, 1], size=x.shape, p=[p, 1-p]).astype(x.dtype)
+    return mask
+
+
+def get_mask(shape, dtype=np.float32, p=0.):
+    mask = np.random.choice([0, 1], size=shape, p=[p, 1-p]).astype(dtype)
+    return mask
+
+
+def dropout_mask_lstm(x: np.ndarray, p=0.):
+    mask = np.random.choice([0, 1], size=(x.shape[0],), p=[p, 1-p]).astype(x.dtype)
+    return mask
+

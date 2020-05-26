@@ -1,7 +1,9 @@
 import numpy as np
+import pandas as pd
 import pickle
 from tqdm import tqdm, trange
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.utils import shuffle
 import warnings
 
 from model.tensor_new import *
@@ -23,9 +25,21 @@ def load_df(fn):
 
 
 # load dump df
-train_df = load_df(settings.TRAIN_DF_DUMP)
-test_df = load_df(settings.TEST_DF_DUMP)
-dev_df = load_df(settings.DEV_DF_DUMP)
+train_df: pd.DataFrame = load_df(settings.TRAIN_DF_DUMP)
+test_df: pd.DataFrame = load_df(settings.TEST_DF_DUMP)
+dev_df: pd.DataFrame = load_df(settings.DEV_DF_DUMP)
+
+# sampling
+train_df_burst = train_df[train_df['label'] == 'burst']
+train_df_non_burst = train_df[train_df['label'] == 'non-burst']
+
+# expected_len = len(train_df_non_burst) * 3 // 7
+# train_df_burst = pd.concat([train_df_burst] * (expected_len // len(train_df_burst)), ignore_index=True)
+#
+train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
+
+print(len(train_df[train_df['label'] == 'burst']))
+print(len(train_df[train_df['label'] == 'non-burst']))
 
 # load vocab
 user_vocab = Vocab(vocab_file=settings.USER_VOCAB_FN)
@@ -130,7 +144,8 @@ model = RedditModel(
     word_embedding=word_embedding,
     hidden_dim=300,
     output_dim=len(label_vocab),
-    device=settings.DEVICE
+    device=settings.DEVICE,
+    p_dropout=0.5,
 )
 
 criterion = CrossEntropyLoss()
@@ -143,6 +158,7 @@ for epoch in epoch_bar:
     epoch_bar.set_description(f'Epoch {epoch}')
     # epoch_losses = []
     total_train_loss = 0
+    model.train()
     train_batch_bar = tqdm(train_dl, position=1)
     for i, (x, y) in enumerate(train_batch_bar):
         output = model(x)
@@ -159,9 +175,12 @@ for epoch in epoch_bar:
     eval_trues = []
     # eval_losses = []
     total_eval_loss = 0
+    model.eval()
     eval_batch_bar = tqdm(dev_dl, position=1)
+    eval_outputs = []
     for i, (x, y) in enumerate(eval_batch_bar):
         output = model(x)
+        eval_outputs.append(output.cpu().data)
         loss = criterion(output, target=y)
         preds = output.argmax(dim=1).cpu().data.astype(np.int32)
         eval_preds.extend(preds)
@@ -174,7 +193,7 @@ for epoch in epoch_bar:
 
     acc = accuracy_score(y_true=eval_trues, y_pred=eval_preds)
     f1 = f1_score(y_true=eval_trues, y_pred=eval_preds, labels=[0, 1])
-    # auc_score = roc_auc_score(y_true=eval_trues, y_score=)
+    auc_score = roc_auc_score(y_true=eval_trues, y_score=np.concatenate(eval_outputs, axis=0)[:, 1])
     eval_batch_bar.close()
 
     # train_batch_bar.reset()
@@ -183,5 +202,5 @@ for epoch in epoch_bar:
     # epoch_bar.write(f'Epoch {epoch}: \ntrain_avg_loss = {np.average(epoch_losses)}\r')
     # epoch_bar.write(f'Eval: avg_loss = {np.average(eval_losses)}, accuracy = {acc}, f1_score = {f1}\r')
     epoch_bar.write(f'Epoch {epoch}: \ntrain_avg_loss = {train_avg_loss}\r')
-    epoch_bar.write(f'Eval: avg_loss = {eval_avg_loss}, accuracy = {acc}, f1_score = {f1}\r')
+    epoch_bar.write(f'Eval: avg_loss = {eval_avg_loss}, accuracy = {acc}, f1_score = {f1}, auc_score = {auc_score}\r')
     epoch_bar.write('-' * 30)

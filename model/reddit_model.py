@@ -12,6 +12,7 @@ class RedditModel(Layer):
             hidden_dim,
             output_dim,
             device='cuda',
+            p_dropout=0.,
             **kwargs,
     ):
         assert user_embedding is not None, 'user_embedding is required'
@@ -33,6 +34,8 @@ class RedditModel(Layer):
         )
 
         self.h2o = Sequential(layers=[
+            ReLu(),
+            Dropout(p=p_dropout),
             Linear(
                 n_inputs=hidden_dim,
                 n_outputs=hidden_dim // 2,
@@ -40,6 +43,7 @@ class RedditModel(Layer):
                 device=device,
             ),
             ReLu(),
+            Dropout(p=p_dropout),
             Linear(
                 n_inputs=hidden_dim // 2,
                 n_outputs=output_dim,

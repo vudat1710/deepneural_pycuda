@@ -21,6 +21,8 @@ __all__ = [
     'ReLu',
     'CrossEntropyLoss',
     'Layer',
+    'Dropout',
+    'LSTMDropout',
 ]
 linalg.init()
 
@@ -29,6 +31,10 @@ dtype = np.float32
 EPSILON = 1e-12
 A_MIN = EPSILON
 A_MAX = 1 - EPSILON
+
+
+def xavier_init(n_input, n_output):
+    return (np.random.rand(n_input, n_output) - 0.5) * np.sqrt(2 / (n_input + n_output))
 
 
 class Tensor:
@@ -402,6 +408,28 @@ class Tensor:
             device=self.device,
         )
 
+    def dropout(self, p=0.):
+        if p == 0.:
+            return self
+        dropout_func = dropout_mask_gpu if self.device == 'cuda' else dropout_mask
+        mask = Tensor(
+            data=dropout_func(self.data, p=p),
+            autograd=True,
+            device=self.device,
+        )
+        return self * mask
+
+    def dropout_lstm(self, p=0.):
+        if p == 0.:
+            return self
+        dropout_func = dropout_mask_lstm_gpu if self.device == 'cuda' else dropout_mask_lstm
+        mask = Tensor(
+            data=dropout_func(self.data, p=p),
+            autograd=True,
+            device=self.device,
+        )
+        return self * mask
+
     def index_select(self, indices, device=None):
         if indices.device == 'cuda':
             indices = indices.cpu().astype(np.int)
@@ -593,6 +621,8 @@ class Tensor:
 
 
 class Layer:
+    _training = True
+
     def get_parameters(self):
         params = []
         for key, value in self.__dict__.items():
@@ -601,6 +631,18 @@ class Layer:
             elif issubclass(type(value), Layer):
                 params.extend(value.get_parameters())
         return params
+
+    def train(self):
+        self._training = True
+        for key, value in self.__dict__.items():
+            if issubclass(type(value), Layer):
+                value.train()
+
+    def eval(self):
+        self._training = False
+        for key, value in self.__dict__.items():
+            if issubclass(type(value), Layer):
+                value.eval()
 
 
 class SGD:
@@ -631,7 +673,7 @@ class Linear(Layer):
         self.use_bias = bias
         self.device = device
 
-        w = np.random.randn(n_inputs, n_outputs) * np.sqrt(2.0 / n_inputs)
+        w = xavier_init(n_input=n_inputs, n_output=n_outputs)
         self.weight = Tensor(w, device=device, autograd=True)
 
         if self.use_bias:
@@ -749,6 +791,34 @@ class ReLu(Layer):
         return self.forward(input)
 
 
+class Dropout(Layer):
+    def __init__(self, p=0.):
+        super(Dropout, self).__init__()
+        self.p = p
+
+    def forward(self, input: Tensor):
+        if not self._training or self.p == 0.:
+            return input
+        return input.dropout(self.p)
+
+    def __call__(self, input: Tensor):
+        return self.forward(input)
+
+
+class LSTMDropout(Layer):
+    def __init__(self, p=0.):
+        super(LSTMDropout, self).__init__()
+        self.p = p
+
+    def forward(self, input: Tensor):
+        if not self._training or self.p == 0.:
+            return input
+        return input.dropout_lstm(self.p)
+
+    def __call__(self, input: Tensor):
+        return self.forward(input)
+
+
 class CrossEntropyLoss:
     @staticmethod
     def forward(input: Tensor, target: Tensor):
@@ -813,6 +883,7 @@ class LSTMLayer(Layer):
             input_dim,
             hidden_dim,
             device='cuda',
+            p_dropout=0.,
     ):
         super(LSTMLayer, self).__init__()
         self.input_dim = input_dim
@@ -823,6 +894,7 @@ class LSTMLayer(Layer):
             hidden_dim=hidden_dim,
             device=device,
         )
+        # self.dropout = LSTMDropout(p=p_dropout)
 
     def forward(self, inputs: list):
         hidden = None

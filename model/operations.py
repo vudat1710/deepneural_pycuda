@@ -11,6 +11,119 @@ from skcuda import misc, linalg
 _global_cublas_allocator = drv.mem_alloc
 _global_cublas_handle = cublas.cublasCreate()
 
+sigmoid_float_ker = ElementwiseKernel(
+    f"float *Y, float *x",
+    "Y[i] = 1.0 / (1.0 + exp (-x[i]) )",
+    "sigmoid_float")
+
+sigmoid_double_ker = ElementwiseKernel(
+    f"double *Y, double *x",
+    "Y[i] = 1.0 / (1.0 + exp (-x[i]) )",
+    "sigmoid_double")
+
+tanh_float_ker = ElementwiseKernel(
+    f"float *Y, float *x",
+    "Y[i] = (exp (x[i]) - exp (-x[i])) / (exp (x[i]) + exp (-x[i]))",
+    "tanh_float")
+
+tanh_double_ker = ElementwiseKernel(
+    f"double *Y, double *x",
+    "Y[i] = (exp (x[i]) - exp (-x[i])) / (exp (x[i]) + exp (-x[i]))",
+    "tanh_double"
+)
+
+exp_sum_float_ker = ReductionKernel(np.float32, neutral="0.0",
+                                    reduce_expr="a+b", map_expr="exp (x[i])",
+                                    arguments=f"float *x"
+                                    )
+
+softmax_float_ker = ElementwiseKernel(
+    f"float *Y, float *x, float s",
+    "Y[i] = exp (x[i]) / s",
+    "softmax_float"
+)
+
+exp_sum_double_ker = ReductionKernel(np.float32, neutral="0.0",
+                                     reduce_expr="a+b", map_expr="exp (x[i])",
+                                     arguments=f"double *x"
+                                     )
+
+softmax_double_ker = ElementwiseKernel(
+    f"double *Y, double *x, double s",
+    "Y[i] = exp (x[i]) / s",
+    "softmax_double"
+)
+
+exp_float_ker = ElementwiseKernel(
+    arguments=f"float *inp, float *out",
+    operation=f"out[i] = exp(inp[i])",
+    name='exp_float_ker',
+)
+
+exp_double_ker = ElementwiseKernel(
+    arguments=f"double *inp, double *out",
+    operation=f"out[i] = exp(inp[i])",
+    name='exp_double_ker',
+)
+
+square_float_ker = ElementwiseKernel(
+    f"float *Y, float *x",
+    "Y[i] = x[i] * x[i]",
+    "square_float_ker")
+
+square_double_ker = ElementwiseKernel(
+    f"double *Y, double *x",
+    "Y[i] = x[i] * x[i]",
+    "square_double_ker")
+
+sigmoid_grad_float_ker = ElementwiseKernel(
+    arguments=f"float *inp, float *out",
+    operation="out[i] = inp[i] * (1.0 - inp[i])",
+    name="sigmoid_grad_float_ker",
+)
+
+sigmoid_grad_double_ker = ElementwiseKernel(
+    arguments=f"double *inp, double *out",
+    operation="out[i] = inp[i] * (1.0 - inp[i])",
+    name="sigmoid_grad_double_ker",
+)
+
+tanh_grad_float_ker = ElementwiseKernel(
+    arguments="float *inp, float *out",
+    operation="out[i] = 1.0 - inp[i] * inp[i]",
+    name="tanh_grad_float_ker",
+)
+
+tanh_grad_double_ker = ElementwiseKernel(
+    arguments="double *inp, double *out",
+    operation="out[i] = 1.0 - inp[i] * inp[i]",
+    name="tanh_grad_double_ker",
+)
+
+relu_float_ker = ElementwiseKernel(
+    arguments="float *inp, float *out",
+    operation="out[i] = (inp[i] > 0) ? inp[i] : 0",
+    name="relu_float_ker",
+)
+
+relu_double_ker = ElementwiseKernel(
+    arguments="double *inp, double *out",
+    operation="out[i] = (inp[i] > 0) ? inp[i] : 0",
+    name="relu_double_ker",
+)
+
+relu_grad_float_ker = ElementwiseKernel(
+    arguments="float *inp, float *out",
+    operation="out[i] = (inp[i] > 0) ? 1 : 0",
+    name="relu_grad_float_ker",
+)
+
+relu_grad_double_ker = ElementwiseKernel(
+    arguments="double *inp, double *out",
+    operation="out[i] = (inp[i] > 0) ? 1 : 0",
+    name="relu_grad_double_ker",
+)
+
 
 def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_alloc):
     """
@@ -132,37 +245,64 @@ def sum_gpu(
 
 
 def tanh_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    tanh_ = ElementwiseKernel(
-        f"{ctype} *Y, {ctype} *x",
-        "Y[i] = (exp (x[i]) - exp (-x[i])) / (exp (x[i]) + exp (-x[i]))",
-        "tanh_")
+    tanh = tanh_float_ker if x.dtype == np.float32 else tanh_double_ker
     y = pycuda.gpuarray.empty_like(x)
-    tanh_(y, x)
+    tanh(y, x)
     return y
 
 
-def sigmoid_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    sigmoid = ElementwiseKernel(
-        f"{ctype} *Y, {ctype} *x",
-        "Y[i] = 1.0 / (1.0 + exp (-x[i]) )",
-        "sigmoid")
-    y = pycuda.gpuarray.empty_like(x)
+def tanh_grad_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
+    tanh_grad = tanh_grad_float_ker if x.dtype == np.float32 else tanh_grad_double_ker
+    y = gpuarray.empty_like(x)
+    tanh_grad(x, y)
+    return y
+
+
+def sigmoid_gpu(x: gpuarray.GPUArray, out: gpuarray.GPUArray = None) -> gpuarray.GPUArray:
+    sigmoid = sigmoid_float_ker if x.dtype == np.float32 else sigmoid_double_ker
+    if out is None:
+        y = pycuda.gpuarray.empty_like(x)
+    else:
+        y = out
     sigmoid(y, x)
     return y
 
 
-def softmax_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    exp_sum = ReductionKernel(x.dtype, neutral="0.0",
-                              reduce_expr="a+b", map_expr="exp (x[i])",
-                              arguments=f"{ctype} *x")
-    softmax = ElementwiseKernel(
-        f"{ctype} *Y, {ctype} *x, {ctype} s",
-        "Y[i] = exp (x[i]) / s",
-        "softmax")
-    y = pycuda.gpuarray.empty_like(x)
+def sigmoid_grad_gpu(x: gpuarray.GPUArray, out: gpuarray.GPUArray = None) -> gpuarray.GPUArray:
+    sigmoid_grad = sigmoid_grad_float_ker if x.dtype == np.float32 else sigmoid_grad_double_ker
+    if out is None:
+        y = gpuarray.empty_like(x)
+    else:
+        y = out
+    sigmoid_grad(x, y)
+    return y
+
+
+def relu_gpu(x: gpuarray.GPUArray):
+    relu = relu_float_ker if x.dtype == np.float32 else relu_double_ker
+    y = gpuarray.empty_like(x)
+    relu(x, y)
+    return y
+
+
+def relu_grad_gpu(x: gpuarray.GPUArray):
+    relu_grad = relu_grad_float_ker if x.dtype == np.float32 else relu_grad_double_ker
+    y = gpuarray.empty_like(x)
+    relu_grad(x, y)
+    return y
+
+
+def softmax_gpu(x: gpuarray.GPUArray, out: gpuarray.GPUArray = None) -> gpuarray.GPUArray:
+    if x.dtype == np.float32:
+        exp_sum = exp_sum_float_ker
+        softmax = softmax_float_ker
+    else:
+        exp_sum = exp_sum_double_ker
+        softmax = softmax_double_ker
+    if y is None:
+        y = pycuda.gpuarray.empty_like(x)
+    else:
+        y = out
     s = exp_sum(x).get()
     softmax(y, x, s)
     return y
@@ -180,48 +320,30 @@ def expand(x: gpuarray.GPUArray, dim: int, copies):
 def softmax_gpu2d(x: gpuarray.GPUArray, dim):
     assert len(x.shape) == 2, 'expected 2-dimension array'
     assert 0 <= dim <= 1, "expected 0 <= dim <=1"
-    copies = x.shape[0] if dim == 0 else x.shape[1]
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    exp_ker = ElementwiseKernel(
-        arguments=f"{ctype} *inp, {ctype} *out",
-        operation=f"out[i] = exp(inp[i])",
-        name='exp_ker',
-    )
+    exp_ker = exp_float_ker if x.dtype == np.float32 else exp_double_ker
     x_exp = gpuarray.empty_like(x)
     exp_ker(x, x_exp)
     x_exp_sum = misc.sum(x_gpu=x_exp, axis=dim)
-    # x_exp_sum_expand = expand(x_exp_sum, dim, copies)
-    # divide_ker = ElementwiseKernel(
-    #     arguments=f"{ctype} *x, {ctype} *y",
-    #     operation='x[i] = x[i]/y[i]',
-    #     name='divide_ker'
-    # )
-    # divide_ker(x_exp, x_exp_sum_expand)
-
     x_exp = misc.div_matvec(x_gpu=x_exp, a_gpu=x_exp_sum, axis=1 - dim)
     return x_exp
 
 
 def square_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    square = ElementwiseKernel(
-        f"{ctype} *Y, {ctype} *x",
-        "Y[i] = x[i] * x[i]",
-        "square")
+    square = square_float_ker if x.dtype == np.float32 else square_double_ker
     y = pycuda.gpuarray.empty_like(x)
     square(y, x)
     return y
 
 
-def from_one_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-    ctype = 'float' if x.dtype == np.float32 else 'double'
-    from_one = ElementwiseKernel(
-        f"{ctype} *Y, {ctype} *x",
-        "Y[i] = 1.0 - x[i]",
-        "from_one")
-    y = pycuda.gpuarray.empty_like(x)
-    from_one(y, x)
-    return y
+# def from_one_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
+#     ctype = 'float' if x.dtype == np.float32 else 'double'
+#     from_one = ElementwiseKernel(
+#         f"{ctype} *Y, {ctype} *x",
+#         "Y[i] = 1.0 - x[i]",
+#         "from_one")
+#     y = pycuda.gpuarray.empty_like(x)
+#     from_one(y, x)
+#     return y
 
 
 # CPU Support
@@ -234,6 +356,16 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
 
 def tanh(x: np.ndarray) -> np.ndarray:
     func = np.vectorize(lambda x: np.tanh(x))
+    return func(x)
+
+
+def relu(x: np.ndarray):
+    func = np.vectorize(lambda x: max(x, 0))
+    return func(x)
+
+
+def relu_grad(x: np.ndarray):
+    func = np.vectorize(lambda x: 1 if x > 0 else 0)
     return func(x)
 
 

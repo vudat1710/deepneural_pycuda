@@ -6,12 +6,29 @@ from pycuda import gpuarray
 from model.operations import *
 from skcuda import misc
 from skcuda import linalg
-from skcuda import cublas
+import time
 
+__all__ = [
+    'Tensor',
+    'Linear',
+    'Embedding',
+    'LSTMLayer',
+    'LSTMCell',
+    'SGD',
+    'Sequential',
+    'Sigmoid',
+    'Tanh',
+    'ReLu',
+    'CrossEntropyLoss',
+    'Layer',
+]
 linalg.init()
 
 DEVICE = 'cuda'
 dtype = np.float32
+EPSILON = 1e-12
+A_MIN = EPSILON
+A_MAX = 1 - EPSILON
 
 
 class Tensor:
@@ -65,13 +82,17 @@ class Tensor:
         return True
 
     def backward(self, grad=None, grad_origin=None):
+        # print(f'{self.children} {grad_origin.tensor_id if grad_origin is not None else ""}')
+        t1 = time.time()
         if self.autograd:
             if grad is None:
                 grad = self.ones_like(self)
 
             if grad_origin is not None:
                 if self.children[grad_origin.tensor_id] == 0:
-                    return
+                    # return
+                    # print(f'{self.children} {grad_origin.tensor_id}')
+                    raise Exception("cannot backprop anymore")
                 else:
                     self.children[grad_origin.tensor_id] -= 1
 
@@ -79,11 +100,10 @@ class Tensor:
                 self.grad = grad
             else:
                 self.grad += grad
-                # if hasattr(grad, 'is_index_select') and grad.is_index_select:
-                #     self.grad.selected_indices = grad.selected_indices
 
             # grads must not have grads of their own
             assert grad.autograd is False
+            assert self.grad.autograd is False
 
             if (self.creators is not None and
                     (self.all_children_grads_accounted_for() or grad_origin is None)):
@@ -101,37 +121,48 @@ class Tensor:
                 elif self.creator_op == "mm":
                     c0, c1 = self.creators
                     new = self.grad.mm(c1.transpose())
-                    c0.backward(grad=new)
+                    c0.backward(grad=new, grad_origin=self)
                     new = self.grad.transpose().mm(c0).transpose()
-                    c1.backward(grad=new)
+                    c1.backward(grad=new, grad_origin=self)
                 elif self.creator_op == "transpose":
-                    self.creators[0].backward(self.grad.transpose())
+                    self.creators[0].backward(self.grad.transpose(), grad_origin=self)
                 elif "sum" in self.creator_op:
                     dim = int(self.creator_op.split("_")[1])
+                    grad_expand = self.grad.expand(dim, self.creators[0].data.shape[dim])
                     self.creators[0].backward(
-                        self.grad.expand(dim, self.creators[0].data.shape[dim])
+                        grad_expand,
+                        grad_origin=self,
                     )
                 elif "expand" in self.creator_op:
                     dim = int(self.creator_op.split("_")[1])
-                    self.creators[0].backward(self.grad.sum(dim))
+                    grad_sum = self.grad.sum(dim)
+                    self.creators[0].backward(grad_sum, grad_origin=self)
                 elif self.creator_op == 'neg':
-                    self.creators[0].backward(-self.grad)
+                    grad_neg = - self.grad
+                    self.creators[0].backward(grad_neg, grad_origin=self)
                 elif self.creator_op == "sigmoid":
-                    ones_ = self.ones_like(self.grad)
-                    self.creators[0].backward(self.grad * (self * (ones_ - self)))
+                    grad_sigmoid = self.grad * self.sigmoid_grad()
+                    self.creators[0].backward(grad_sigmoid, grad_origin=self)
                 elif self.creator_op == "tanh":
-                    ones_ = self.ones_like(self.grad)
-                    self.creators[0].backward(self.grad * (ones_ - (self * self)))
+                    grad_tanh = self.grad * self.tanh_grad()
+                    self.creators[0].backward(grad_tanh, grad_origin=self)
+                elif self.creator_op == "relu":
+                    grad_relu = self.grad * self.relu_grad()
+                    self.creators[0].backward(grad_relu, grad_origin=self)
                 elif self.creator_op == "index_select":
                     new_grad = self.zeros_like(self.creators[0])
                     indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
                     grad_ = grad.reshape((len(indices_), -1))
                     for i in range(len(indices_)):
-                        new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
-                    self.creators[0].backward(new_grad)
+                        # new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
+                        new_grad.data[indices_[i]] += grad_.data[i]
+                    self.creators[0].backward(new_grad, grad_origin=self)
                 elif self.creator_op == "cross_entropy":
                     dx = self.__getattribute__("softmax_output") - self.__getattribute__("target_dist")
-                    self.creators[0].backward(Tensor(data=dx, device=self.creators[0].device))
+                    self.creators[0].backward(Tensor(data=dx, device=self.creators[0].device), grad_origin=self)
+
+        t2 = time.time()
+        # print(f'backward in {self.tensor_id} {grad_origin.creator_op if grad_origin is not None else "NO_OP"} {grad_origin.tensor_id if grad_origin is not None else "NO_ORIGIN"} : {t2 - t1}')
 
     def __add__(self, other):
         assert self.device == other.device, f"expect {self.device} assert trigger but {other.device}"
@@ -302,6 +333,17 @@ class Tensor:
             device=self.device,
         )
 
+    def sigmoid_grad(self):
+        if self.device == 'cuda':
+            data = sigmoid_grad_gpu(x=self.data)
+        else:
+            data = self.data * (1 - self.data)
+        return Tensor(
+            data=data,
+            autograd=False,
+            device=self.device,
+        )
+
     def tanh(self):
         if self.device == 'cuda':
             data = tanh_gpu(x=self.data)
@@ -317,6 +359,46 @@ class Tensor:
             )
         return Tensor(
             data=data,
+            device=self.device,
+        )
+
+    def tanh_grad(self):
+        if self.device == 'cuda':
+            data = tanh_grad_gpu(x=self.data)
+        else:
+            data = 1 - self.data ** 2
+        return Tensor(
+            data=data,
+            autograd=False,
+            device=self.device,
+        )
+
+    def relu(self):
+        if self.device == 'cuda':
+            data = relu_gpu(self.data)
+        else:
+            data = relu(self.data)
+        if self.autograd:
+            return Tensor(
+                data=data,
+                autograd=True,
+                creators=[self],
+                creation_op="relu",
+                device=self.device,
+            )
+        return Tensor(
+            data=data,
+            device=self.device,
+        )
+
+    def relu_grad(self):
+        if self.device == 'cuda':
+            data = relu_grad_gpu(self.data)
+        else:
+            data = relu_grad(self.data)
+        return Tensor(
+            data=data,
+            autograd=False,
             device=self.device,
         )
 
@@ -341,7 +423,11 @@ class Tensor:
             )
             new.index_select_indices = indices
             return new
-        return Tensor(data=data, autograd=True, device=self.device if device is None else device, )
+        return Tensor(
+            data=data,
+            autograd=True,
+            device=self.device if device is None else device,
+        )
 
     def _index_select_cuda(self, indices):
         data = gpuarray.empty(shape=(len(indices), *self.shape[1:]), dtype=self.dtype)
@@ -371,9 +457,9 @@ class Tensor:
             softmax_output = softmax(self.data)
 
         t = target_indices.data.flatten()
-        p = softmax_output.reshape(len(t), -1)
+        p = np.clip(softmax_output.reshape(len(t), -1), a_min=A_MIN, a_max=A_MAX)
         target_dist = np.eye(p.shape[1])[t]
-        loss = -(np.log(p) * target_dist).sum(1).mean()
+        loss = -(np.log(p + EPSILON) * target_dist).sum(1).mean()
 
         if self.autograd:
             loss_tensor = Tensor(
@@ -387,6 +473,17 @@ class Tensor:
             loss_tensor.target_dist = target_dist
             return loss_tensor
         return Tensor(data=loss, device=self.device, )
+
+    def argmax(self, dim):
+        if self.device == 'cuda':
+            arg_max = misc.argmax(self.data, axis=dim, keepdims=False)
+        else:
+            arg_max = np.argmax(self.data, axis=dim)
+        return Tensor(
+            data=arg_max,
+            device=self.device,
+            d_type=np.int32,
+        )
 
     @property
     def shape(self):
@@ -496,11 +593,14 @@ class Tensor:
 
 
 class Layer:
-    def __init__(self):
-        self.parameters = list()
-
     def get_parameters(self):
-        return self.parameters
+        params = []
+        for key, value in self.__dict__.items():
+            if type(value) is Tensor and value.autograd:
+                params.append(value)
+            elif issubclass(type(value), Layer):
+                params.extend(value.get_parameters())
+        return params
 
 
 class SGD:
@@ -514,9 +614,6 @@ class SGD:
 
     def step(self, zero=True):
         for p in self.parameters:
-            # if hasattr(p.grad, 'selected_indices'):
-            #     p.data[p.grad.selected_indices] -= p.grad.to(p.device).data * self.lr
-            # else:
             p.data -= p.grad.to(p.device).data * self.lr
             if zero:
                 p.grad.data *= 0
@@ -536,11 +633,9 @@ class Linear(Layer):
 
         w = np.random.randn(n_inputs, n_outputs) * np.sqrt(2.0 / n_inputs)
         self.weight = Tensor(w, device=device, autograd=True)
-        self.parameters.append(self.weight)
 
         if self.use_bias:
             self.bias = Tensor(np.zeros(n_outputs, dtype=np.float32), device=device, autograd=True)
-            self.parameters.append(self.bias)
 
     def forward(self, input: Tensor):
         if self.use_bias:
@@ -575,20 +670,33 @@ class Sequential(Layer):
 
 
 class Embedding(Layer):
-    def __init__(self, vocab_size, embedding_dim, device='cuda', autograd=False):
+    def __init__(
+            self,
+            vectors: np.ndarray,
+            device='cuda',
+            autograd=False,
+    ):
         super(Embedding, self).__init__()
-        self.vocab_size = vocab_size
-        self.dim = embedding_dim
+        assert len(vectors.shape) == 2, 'vectors must have 2 dim'
+        self.vocab_size, self.embedding_dim = vectors.shape
         self.autograd = autograd
         self.device = device
 
         self.weight = Tensor(
-            data=(np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim,
+            data=vectors,
             autograd=autograd,
             device=self.device,
         )
-        if self.autograd:
-            self.parameters.append(self.weight)
+
+    @classmethod
+    def from_pretrained(cls, vectors: np.ndarray, device='cuda', autograd=False):
+        embedding = cls(vectors=vectors, device=device, autograd=autograd)
+        return embedding
+
+    @classmethod
+    def init(cls, vocab_size, embedding_dim, device='cuda', autograd=False):
+        vectors = (np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim
+        return cls(vectors=vectors, device=device, autograd=autograd)
 
     def forward(self, input):
         assert len(input.shape) in [1, 2]
@@ -629,7 +737,19 @@ class Sigmoid(Layer):
         return self.forward(input)
 
 
-class CrossEntroyLoss:
+class ReLu(Layer):
+    def __init__(self):
+        super(ReLu, self).__init__()
+
+    @staticmethod
+    def forward(input: Tensor):
+        return input.relu()
+
+    def __call__(self, input: Tensor):
+        return self.forward(input)
+
+
+class CrossEntropyLoss:
     @staticmethod
     def forward(input: Tensor, target: Tensor):
         return input.cross_entropy(target)
@@ -643,13 +763,11 @@ class LSTMCell(Layer):
             self,
             input_dim,
             hidden_dim,
-            output_dim,
             device='cuda',
     ):
         super(LSTMCell, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
         self.device = device
 
         self.xf = Linear(n_inputs=input_dim, n_outputs=hidden_dim, device=device)
@@ -661,17 +779,6 @@ class LSTMCell(Layer):
         self.hi = Linear(n_inputs=hidden_dim, n_outputs=hidden_dim, bias=False, device=device)
         self.ho = Linear(n_inputs=hidden_dim, n_outputs=hidden_dim, bias=False, device=device)
         self.hc = Linear(n_inputs=hidden_dim, n_outputs=hidden_dim, bias=False, device=device)
-
-        self.parameters.extend([
-            *self.xf.get_parameters(),
-            *self.xi.get_parameters(),
-            *self.xo.get_parameters(),
-            *self.xc.get_parameters(),
-            *self.hf.get_parameters(),
-            *self.hi.get_parameters(),
-            *self.ho.get_parameters(),
-            *self.hc.get_parameters(),
-        ])
 
     def forward(self, input, hidden=None):
         if hidden is not None:
@@ -685,7 +792,7 @@ class LSTMCell(Layer):
         u = (self.xc(input) + self.hc(prev_hidden)).tanh()
         c = (f * prev_cell) + (i * u)
         h = o * c.tanh()
-        return h, c
+        return h, (h, c)
 
     def __call__(self, input, hidden=None):
         return self.forward(input, hidden)
@@ -698,3 +805,32 @@ class LSTMCell(Layer):
         h = Tensor(h_data, autograd=True, device=self.device)
         c = Tensor(c_data, autograd=True, device=self.device)
         return h, c
+
+
+class LSTMLayer(Layer):
+    def __init__(
+            self,
+            input_dim,
+            hidden_dim,
+            device='cuda',
+    ):
+        super(LSTMLayer, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.device = device
+        self.lstm_cell = LSTMCell(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            device=device,
+        )
+
+    def forward(self, inputs: list):
+        hidden = None
+        outputs = []
+        for input in inputs:
+            output, hidden = self.lstm_cell(input, hidden)
+            outputs.append(output)
+        return outputs, hidden
+
+    def __call__(self, inputs):
+        return self.forward(inputs)

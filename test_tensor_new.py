@@ -325,6 +325,55 @@ def test_expand():
     x_cpu = Tensor(data, device='cpu')
     print(x_gpu.expand(dim=1, copies=5))
     print(x_cpu.expand(dim=1, copies=5))
+    print('norm', x_gpu.norm())
+
+
+def test_gpu_vs_cpu():
+    vectors = np.random.normal(0, 1, size=(20, 8)) * (2/28) ** 0.5
+    vectors[0, :] = 0
+
+    embedding_gpu = Embedding.from_pretrained(
+        vectors=vectors,
+        padding_index=0,
+        device='cuda',
+        autograd=True,
+    )
+
+    embedding_cpu = Embedding.from_pretrained(
+        vectors=vectors,
+        padding_index=0,
+        device='cpu',
+        autograd=True,
+    )
+
+    indices = Tensor([[0, 1, 0, 4, 5],
+                      [1, 4, 0, 1, 2]], device='cpu', d_type=np.int32)
+    embeds_gpu = embedding_gpu(indices)
+    embeds_cpu = embedding_cpu(indices)
+
+    linear_cpu = Linear(8, 2, device='cpu', bias=True)
+    linear_gpu = Linear(8, 2, device='cuda', bias=True)
+    linear_gpu.weight = linear_cpu.weight.to('cuda')
+    linear_gpu.bias = linear_cpu.bias.to('cuda')
+    # print(embeds_gpu[0].shape)
+
+    out_cpu = linear_cpu(embeds_cpu[0])
+    out_gpu = linear_gpu(embeds_gpu[0])
+    # print(out_cpu)
+    # print(out_gpu)
+
+    target = Tensor([1, 0, 1, 0, 0], device='cpu', d_type=np.int32)
+    loss_gpu = out_gpu.cross_entropy(target)
+    loss_cpu = out_cpu.cross_entropy(target)
+    print(loss_cpu, loss_gpu)
+    loss_gpu.backward()
+    loss_cpu.backward()
+
+    print(linear_gpu.weight.grad)
+    print(linear_cpu.weight.grad)
+
+    print(embedding_gpu.weight.grad)
+    print(embedding_cpu.weight.grad)
 
 
 if __name__ == '__main__':
@@ -367,4 +416,6 @@ if __name__ == '__main__':
     # test_relu()
 
     # test expand
-    test_expand()
+    # test_expand()
+
+    test_gpu_vs_cpu()

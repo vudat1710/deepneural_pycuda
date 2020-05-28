@@ -30,13 +30,13 @@ test_df: pd.DataFrame = load_df(settings.TEST_DF_DUMP)
 dev_df: pd.DataFrame = load_df(settings.DEV_DF_DUMP)
 
 # sampling
-# train_df_burst = train_df[train_df['label'] == 'burst']
-# train_df_non_burst = train_df[train_df['label'] == 'non-burst']
+train_df_burst = train_df[train_df['label'] == 'burst']
+train_df_non_burst = train_df[train_df['label'] == 'non-burst']
 
 # expected_len = len(train_df_non_burst) * 3 // 7
 # train_df_burst = pd.concat([train_df_burst] * (expected_len // len(train_df_burst)), ignore_index=True)
 #
-# train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
+train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
 
 # print(len(train_df[train_df['label'] == 'burst']))
 # print(len(train_df[train_df['label'] == 'non-burst']))
@@ -45,7 +45,7 @@ dev_df: pd.DataFrame = load_df(settings.DEV_DF_DUMP)
 user_vocab = Vocab(vocab_file=settings.USER_VOCAB_FN)
 sub_vocab = Vocab(vocab_file=settings.SUB_VOCAB_FN)
 words, word_vectors = load_glove_emb(fn=settings.GLOVE_EMBEDDING_FN)
-word_vocab = Vocab(words=words)
+word_vocab = Vocab(words=list(range(len(words))), additional_terms=False)
 label_vocab = Vocab(words=['non-burst', 'burst'], additional_terms=False)
 
 # make dataset
@@ -160,7 +160,7 @@ model = RedditModel(
     hidden_dim=64,
     output_dim=len(label_vocab),
     device=settings.DEVICE,
-    p_dropout=0.5,
+    p_dropout=0.2,
 )
 
 criterion = CrossEntropyLoss()
@@ -184,6 +184,9 @@ for epoch in epoch_bar:
         output = model(x)
         loss = criterion(output, target=y)
         loss.backward()
+        num_one = np.sum(output.argmax(dim=1).cpu().data, axis=0)
+        # if num_one == 0.:
+        #     print(model.h2o.layers[-1].weight)
         optimizer.step(zero=True)
         # epoch_losses.append(loss.data)
         total_train_loss += loss.data

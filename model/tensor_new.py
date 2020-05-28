@@ -597,6 +597,7 @@ class Tensor:
                 device='cuda',
             )
             data.grad = self.grad.cuda() if self.grad is not None else None
+            return data
         else:
             return self
 

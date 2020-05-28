@@ -20,9 +20,11 @@ __all__ = [
     'Tanh',
     'ReLu',
     'CrossEntropyLoss',
+    'BCEWithLogitsLoss',
     'Layer',
     'Dropout',
     'LSTMDropout',
+    'Adam',
 ]
 linalg.init()
 
@@ -34,7 +36,17 @@ A_MAX = 1 - EPSILON
 
 
 def xavier_init(n_input, n_output):
-    return (np.random.rand(n_input, n_output) - 0.5) * np.sqrt(2 / (n_input + n_output))
+    return np.random.normal(loc=0, scale=1, size=(n_input, n_output)) * np.sqrt(2 / (n_input + n_output))
+
+
+def truncated_normal(mean, std, out_shape):
+    samples = np.random.normal(loc=mean, scale=std, size=out_shape)
+    reject = np.logical_or(samples >= mean + 2 * std, samples <= mean - 2 * std)
+    while any(reject.flatten()):
+        resamples = np.random.normal(loc=mean, scale=std, size=reject.sum())
+        samples[reject] = resamples
+        reject = np.logical_or(samples >= mean + 2 * std, samples <= mean - 2 * std)
+    return samples
 
 
 class Tensor:
@@ -88,8 +100,6 @@ class Tensor:
         return True
 
     def backward(self, grad=None, grad_origin=None):
-        # print(f'{self.children} {grad_origin.tensor_id if grad_origin is not None else ""}')
-        t1 = time.time()
         if self.autograd:
             if grad is None:
                 grad = self.ones_like(self)
@@ -158,17 +168,19 @@ class Tensor:
                 elif self.creator_op == "index_select":
                     new_grad = self.zeros_like(self.creators[0])
                     indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
+                    padding_index = self.__getattribute__('padding_index')
                     grad_ = grad.reshape((len(indices_), -1))
                     for i in range(len(indices_)):
                         # new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
-                        new_grad.data[indices_[i]] += grad_.data[i]
+                        if indices_[i] != padding_index:
+                            new_grad.data[indices_[i]] += grad_.data[i]
                     self.creators[0].backward(new_grad, grad_origin=self)
                 elif self.creator_op == "cross_entropy":
                     dx = self.__getattribute__("softmax_output") - self.__getattribute__("target_dist")
                     self.creators[0].backward(Tensor(data=dx, device=self.creators[0].device), grad_origin=self)
-
-        t2 = time.time()
-        # print(f'backward in {self.tensor_id} {grad_origin.creator_op if grad_origin is not None else "NO_OP"} {grad_origin.tensor_id if grad_origin is not None else "NO_ORIGIN"} : {t2 - t1}')
+                elif self.creator_op == "bce":
+                    dx = self.__getattribute__("dx")
+                    self.creators[0].backward(Tensor(data=dx, device=self.creators[0].device), grad_origin=self)
 
     def __add__(self, other):
         assert self.device == other.device, f"expect {self.device} assert trigger but {other.device}"
@@ -254,11 +266,7 @@ class Tensor:
 
     def expand(self, dim, copies):
         if self.device == "cuda":
-            trans_dims = list(range(0, len(self.data.shape)))
-            trans_dims.insert(dim, len(self.data.shape))
-            order = 'F' if dim == 0 else 'C'
-            data = (linalg.dot(self.data.reshape(-1, 1), misc.ones((1, copies), dtype=dtype))
-                    .reshape((*self.data.shape, copies), order=order)).transpose(trans_dims)
+            data = expand_gpu(x=self.data, dim=dim, copies=copies)
         else:
             trans_dims = list(range(0, len(self.data.shape)))
             trans_dims.insert(dim, len(self.data.shape))
@@ -502,6 +510,30 @@ class Tensor:
             return loss_tensor
         return Tensor(data=loss, device=self.device, )
 
+    def bce_loss_with_logits(self, target):
+        assert self.data.shape[1] == 2, 'only available for array have (n, 2) dims'
+        if self.device == 'cuda':
+            # data = self.data.get()
+            data = softmax_gpu2d(self.data, dim=1).get()
+        else:
+            # data = self.data
+            data = softmax(self.data)
+        t = target.data.flatten()
+        target_dist = np.eye(data.shape[1])[t]
+        dx = bce_with_logits(data, target_dist)
+
+        if self.autograd:
+            loss_tensor = Tensor(
+                data=dx.mean(),
+                autograd=True,
+                creators=[self],
+                creation_op="bce",
+                device=self.device,
+            )
+            loss_tensor.dx = dx
+            return loss_tensor
+        return Tensor(data=dx.mean(), device=self.device,)
+
     def argmax(self, dim):
         if self.device == 'cuda':
             arg_max = misc.argmax(self.data, axis=dim, keepdims=False)
@@ -512,6 +544,12 @@ class Tensor:
             device=self.device,
             d_type=np.int32,
         )
+
+    def norm(self):
+        if self.device == 'cuda':
+            return norm_gpu(self.data)
+        else:
+            return np.linalg.norm(self.data)
 
     @property
     def shape(self):
@@ -594,16 +632,18 @@ class Tensor:
             )
 
     @staticmethod
-    def zeros_like(tensor):
+    def zeros_like(tensor, autograd=False):
         if tensor.device == "cuda":
             return Tensor(
                 data=gpuarray.zeros_like(tensor.data, dtype=dtype),
                 device=tensor.device,
+                autograd=autograd,
             )
         else:
             return Tensor(
                 data=np.zeros_like(tensor.data, dtype=dtype),
                 device=tensor.device,
+                autograd=autograd,
             )
 
     @staticmethod
@@ -646,9 +686,58 @@ class Layer:
 
 
 class SGD:
-    def __init__(self, parameters: list, lr=.01):
+    def __init__(self, parameters: list, lr=.01, beta=0.9):
         self.parameters = parameters
         self.lr = lr
+        self.beta = beta
+        self.prev_grads = [p.grad.data if p.grad is not None else None for p in self.parameters]
+
+    def zero(self):
+        for p in self.parameters:
+            p.grad.data *= 0
+
+    def step(self, zero=True):
+        # for p in self.parameters:
+        #     p.data -= p.grad.to(p.device).data * self.lr
+        #     if zero:
+        #         p.grad.data *= 0
+
+        # use moment
+        prev_grads = []
+        for p, prev_g in zip(self.parameters, self.prev_grads):
+            if prev_g is not None:
+                grad = self.beta * prev_g + (1 - self.beta) * p.grad.to(p.device).data
+            else:
+                grad = p.grad.to(p.device).data
+
+            prev_grads.append(grad)
+            p.data -= grad * self.lr
+            if zero:
+                p.grad.data *= 0
+        self.prev_grads = prev_grads
+
+
+class Adam:
+    def __init__(
+            self,
+            parameters: list,
+            lr=.001,
+            decay1=0.9,
+            decay2=0.999,
+            eps=1e-7,
+            clip_norm=None,
+            lr_scheduler=None,
+            **kwargs,
+    ):
+        super(Adam, self).__init__()
+        self.parameters = parameters
+        self.lr = lr
+        self.decay1 = decay1
+        self.decay2 = decay2
+        self.eps = eps
+        self.clip_norm = clip_norm
+        self.lr_scheduler = lr_scheduler
+        self.cache = {}
 
     def zero(self):
         for p in self.parameters:
@@ -656,7 +745,30 @@ class SGD:
 
     def step(self, zero=True):
         for p in self.parameters:
-            p.data -= p.grad.to(p.device).data * self.lr
+            if p.tensor_id not in self.cache:
+                self.cache[p.tensor_id] = {
+                    "t": 0,
+                    "mean": Tensor.zeros_like(p.grad).data,
+                    "var": Tensor.zeros_like(p.grad).data,
+                }
+
+            t = np.inf if self.clip_norm is None else self.clip_norm
+            grad_norm = p.grad.norm()
+            if grad_norm > t:
+                p.grad.data = p.grad.data * t / grad_norm
+
+            t = self.cache[p.tensor_id]["t"] + 1
+            var = self.cache[p.tensor_id]["var"]
+            mean = self.cache[p.tensor_id]["mean"]
+
+            self.cache[p.tensor_id]["t"] = t
+            self.cache[p.tensor_id]["var"] = self.decay2 * var + (1 - self.decay2) * p.grad.data ** 2
+            self.cache[p.tensor_id]["mean"] = self.decay1 * mean + (1 - self.decay1) * p.grad.data
+
+            v_hat = self.cache[p.tensor_id]["var"] / (1 - self.decay2 ** t)
+            m_hat = self.cache[p.tensor_id]["mean"] / (1 - self.decay1 ** t)
+            grad = m_hat / (v_hat ** 0.5 + self.eps)
+            p.data -= self.lr * grad
             if zero:
                 p.grad.data *= 0
 
@@ -674,6 +786,7 @@ class Linear(Layer):
         self.device = device
 
         w = xavier_init(n_input=n_inputs, n_output=n_outputs)
+        # w = truncated_normal(0., 1., (n_inputs, n_outputs))
         self.weight = Tensor(w, device=device, autograd=True)
 
         if self.use_bias:
@@ -715,6 +828,7 @@ class Embedding(Layer):
     def __init__(
             self,
             vectors: np.ndarray,
+            padding_index,
             device='cuda',
             autograd=False,
     ):
@@ -723,6 +837,7 @@ class Embedding(Layer):
         self.vocab_size, self.embedding_dim = vectors.shape
         self.autograd = autograd
         self.device = device
+        self.padding_index = padding_index
 
         self.weight = Tensor(
             data=vectors,
@@ -731,24 +846,27 @@ class Embedding(Layer):
         )
 
     @classmethod
-    def from_pretrained(cls, vectors: np.ndarray, device='cuda', autograd=False):
-        embedding = cls(vectors=vectors, device=device, autograd=autograd)
+    def from_pretrained(cls, vectors: np.ndarray, padding_index, device='cuda', autograd=False):
+        embedding = cls(vectors=vectors, padding_index=padding_index, device=device, autograd=autograd)
         return embedding
 
     @classmethod
-    def init(cls, vocab_size, embedding_dim, device='cuda', autograd=False):
+    def init(cls, vocab_size, embedding_dim, padding_index=0, device='cuda', autograd=False):
         vectors = (np.random.rand(vocab_size, embedding_dim) - 0.5) / embedding_dim
-        return cls(vectors=vectors, device=device, autograd=autograd)
+        return cls(vectors=vectors, padding_index=padding_index, device=device, autograd=autograd)
 
     def forward(self, input):
         assert len(input.shape) in [1, 2]
         if len(input.shape) == 1:
             data = self.weight.index_select(input, device=self.device)
+            data.padding_index = self.padding_index
         else:
             data = [
                 self.weight.index_select(input[i], device=self.device)
                 for i in range(input.shape[0])
             ]
+            for item in data:
+                item.padding_index = self.padding_index
         return data
 
     def __call__(self, input):
@@ -810,19 +928,32 @@ class LSTMDropout(Layer):
         super(LSTMDropout, self).__init__()
         self.p = p
 
-    def forward(self, input: Tensor):
+    def forward(self, inputs: list):
         if not self._training or self.p == 0.:
-            return input
-        return input.dropout_lstm(self.p)
+            return inputs
+        n_dropout = int(len(inputs) * self.p)
+        x = [0] * n_dropout + [1] * (len(inputs) - n_dropout)
+        np.random.shuffle(x)
+        inputs = [inp if drop == 1 else Tensor.zeros_like(inp, autograd=True) for inp, drop in zip(inputs, x)]
+        return inputs
 
-    def __call__(self, input: Tensor):
-        return self.forward(input)
+    def __call__(self, inputs):
+        return self.forward(inputs)
 
 
 class CrossEntropyLoss:
     @staticmethod
     def forward(input: Tensor, target: Tensor):
         return input.cross_entropy(target)
+
+    def __call__(self, input: Tensor, target: Tensor):
+        return self.forward(input, target)
+
+
+class BCEWithLogitsLoss:
+    @staticmethod
+    def forward(input: Tensor, target: Tensor):
+        return input.bce_loss_with_logits(target)
 
     def __call__(self, input: Tensor, target: Tensor):
         return self.forward(input, target)
@@ -883,7 +1014,6 @@ class LSTMLayer(Layer):
             input_dim,
             hidden_dim,
             device='cuda',
-            p_dropout=0.,
     ):
         super(LSTMLayer, self).__init__()
         self.input_dim = input_dim
@@ -894,7 +1024,6 @@ class LSTMLayer(Layer):
             hidden_dim=hidden_dim,
             device=device,
         )
-        # self.dropout = LSTMDropout(p=p_dropout)
 
     def forward(self, inputs: list):
         hidden = None

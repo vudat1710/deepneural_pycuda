@@ -229,6 +229,33 @@ random_lstm_double_func = SourceModule(
     source=random_lstm_ker_template % {'p': 'double'}
 ).get_function('random_lstm_double_array')
 
+norm_float_gpu = ReductionKernel(
+    dtype_out=np.float32,
+    neutral='0',
+    reduce_expr="a + b",
+    map_expr="x[i] * x[i]",
+    arguments="float *x",
+    name='norm',
+)
+
+norm_double_gpu = ReductionKernel(
+    dtype_out=np.float64,
+    neutral='0',
+    reduce_expr="a + b",
+    map_expr="x[i] * x[i]",
+    arguments="double *x",
+    name='norm',
+)
+
+norm_int_gpu = ReductionKernel(
+    dtype_out=np.int32,
+    neutral='0',
+    reduce_expr="a + b",
+    map_expr="x[i] * x[i]",
+    arguments="int *x",
+    name='norm',
+)
+
 
 def ones(shape: tuple, dtype: np.dtype, order: str = 'C', allocator=drv.mem_alloc):
     """
@@ -413,13 +440,52 @@ def softmax_gpu(x: gpuarray.GPUArray, out: gpuarray.GPUArray = None) -> gpuarray
     return y
 
 
-def expand(x: gpuarray.GPUArray, dim: int, copies):
-    trans_dims = list(range(0, len(x.shape)))
-    trans_dims.insert(dim, len(x.shape))
-    order = 'F' if dim == 0 else 'C'
-    data = (linalg.dot(x.reshape(-1, 1), misc.ones((1, copies), dtype=x.dtype))
-            .reshape((*x.shape, copies), order=order)).transpose(trans_dims)
-    return data
+# expand gpu
+expand_dim1_template = "%(p)s *in, %(p)s *out, int copies"
+expand_dim1_float_ker = ElementwiseKernel(
+    arguments=expand_dim1_template % {'p': 'float'},
+    operation="for (int n = 0; n < copies; n++) out[i * copies + n] = in[i]",
+    name="expand_dim1_float_ker",
+)
+expand_dim1_double_ker = ElementwiseKernel(
+    arguments=expand_dim1_template % {'p': 'double'},
+    operation="for (int n = 0; n < copies; n++) out[i * copies + n] = in[i]",
+    name="expand_dim1_double_ker",
+)
+
+expand_dim0_template = "%(p)s *in, %(p)s *out, int copies, int width"
+expand_dim0_float_ker = ElementwiseKernel(
+    arguments=expand_dim0_template % {'p': 'float'},
+    operation="for (int n = 0; n < copies; n++) out[n * width + i] = in[i]",
+    name="expand_dim0_float_ker",
+)
+expand_dim0_double_ker = ElementwiseKernel(
+    arguments=expand_dim0_template % {'p': 'double'},
+    operation="for (int n = 0; n < copies; n++) out[n * width + i] = in[i]",
+    name="expand_dim0_double_ker",
+)
+
+expand_ker = {
+    0: {
+        np.float32: expand_dim0_float_ker,
+        np.float64: expand_dim0_double_ker,
+    },
+    1: {
+        np.float32: expand_dim1_float_ker,
+        np.float64: expand_dim1_double_ker,
+    }
+}
+
+
+def expand_gpu(x: gpuarray.GPUArray, dim: int, copies):
+    expand_func = expand_ker[dim][x.dtype.type]
+    if dim == 0:
+        y = gpuarray.empty((copies, x.shape[0]), dtype=x.dtype)
+        expand_func(x, y, np.int32(copies), np.int32(x.shape[0]))
+    else:
+        y = gpuarray.empty((x.shape[0], copies), dtype=x.dtype)
+        expand_func(x, y, np.int32(copies))
+    return y
 
 
 def softmax_gpu2d(x: gpuarray.GPUArray, dim):
@@ -463,7 +529,8 @@ def dropout_mask_gpu(x: gpuarray.GPUArray, p=0.):
         random_func(mask, np.float32(p), block=(x.shape[0], 1, 1), grid=(1, 1, 1))
     else:
         # random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(32, 32, 1), grid=(x.shape[0]//32, x.shape[1] // 32, 1))
+        random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(32, 32, 1),
+                    grid=((x.shape[0] - 1) // 32 + 1, (x.shape[1] - 1) // 32 + 1, 1))
     return mask
 
 
@@ -475,7 +542,8 @@ def get_mask_gpu(shape, dtype=np.float32, p=0.):
         random_func(mask, np.float32(p), block=(shape[0], 1, 1), grid=(1, 1, 1))
     else:
         # random_func(mask, np.int32(shape[1]), np.float32(p), block=(*shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(shape[1]), np.float32(p), block=(32, 32, 1), grid=(shape[0] // 32, shape[1] // 32, 1))
+        random_func(mask, np.int32(shape[1]), np.float32(p), block=(32, 32, 1),
+                    grid=((shape[0] - 1) // 32 + 1, (shape[1] - 1) // 32 + 1, 1))
     return mask
 
 
@@ -492,7 +560,8 @@ def dropout_mask_lstm_gpu(x: gpuarray.GPUArray, p=0.):
     mask = gpuarray.empty_like(x)
     lstm_func = lstm_ker[x.dtype.type]
     # lstm_func(mask, np.int32(x.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
-    lstm_func(mask, np.int32(x.shape[1]), np.float32(p), block=(32, 32, 1), grid=(x.shape[0]//32, x.shape[1]//32, 1))
+    lstm_func(mask, np.int32(x.shape[1]), np.float32(p), block=(32, 32, 1),
+              grid=((x.shape[0] - 1) // 32 + 1, (x.shape[1] - 1) // 32 + 1, 1))
     return mask
 
 
@@ -505,6 +574,37 @@ def dropout_mask_lstm_gpu(x: gpuarray.GPUArray, p=0.):
 #     y = pycuda.gpuarray.empty_like(x)
 #     from_one(y, x)
 #     return y
+
+norm_ker = {
+    np.int32: norm_int_gpu,
+    np.float32: norm_float_gpu,
+    np.float64: norm_double_gpu,
+}
+
+
+def norm_gpu(x: gpuarray.GPUArray):
+    norm_func = norm_ker[x.dtype.type]
+    return norm_func(x).get() ** 0.5
+
+
+# loss
+def bce_with_logits(predicted, target):
+    if predicted.shape != target.shape:
+        raise ValueError("logits and labels must have the same shape ({} vs {})".format
+                         (predicted.shape, target.shape))
+
+    """
+        Logistic loss formula is x - x * z + log(1 + exp(-x))
+        For x < 0, a more stable formula is -x * z + log(1 + exp(x))
+        Generally the formula we need is max(x, 0) - x * z + log(1 + exp(-abs(x)))
+        """
+
+    zeros = np.zeros_like(predicted, dtype=predicted.dtype)
+    cond = (predicted >= zeros)
+    relu_pred = np.where(cond, predicted, zeros)
+    neg_abs_pred = np.where(cond, -predicted, predicted)
+
+    return np.add(relu_pred - predicted * target, np.log1p(np.exp(neg_abs_pred)))
 
 
 # CPU Support
@@ -531,24 +631,23 @@ def relu_grad(x: np.ndarray):
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
-    smax = np.empty_like(x)
-    for i in range(x.shape[1]):
-        exps = np.exp(x[:, i] - np.max(x[:, i]))
-        smax[:, i] = exps / np.sum(exps)
-    return smax
+    temp = np.exp(x)
+    softmax_output = temp / np.sum(temp,
+                                   axis=len(x.shape) - 1,
+                                   keepdims=True)
+    return softmax_output
 
 
 def dropout_mask(x: np.ndarray, p=0.):
-    mask = np.random.choice([0, 1], size=x.shape, p=[p, 1-p]).astype(x.dtype)
+    mask = np.random.choice([0, 1], size=x.shape, p=[p, 1 - p]).astype(x.dtype)
     return mask
 
 
 def get_mask(shape, dtype=np.float32, p=0.):
-    mask = np.random.choice([0, 1], size=shape, p=[p, 1-p]).astype(dtype)
+    mask = np.random.choice([0, 1], size=shape, p=[p, 1 - p]).astype(dtype)
     return mask
 
 
 def dropout_mask_lstm(x: np.ndarray, p=0.):
-    mask = np.random.choice([0, 1], size=(x.shape[0],), p=[p, 1-p]).astype(x.dtype)
+    mask = np.random.choice([0, 1], size=(x.shape[0],), p=[p, 1 - p]).astype(x.dtype)
     return mask
-

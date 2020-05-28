@@ -30,16 +30,16 @@ test_df: pd.DataFrame = load_df(settings.TEST_DF_DUMP)
 dev_df: pd.DataFrame = load_df(settings.DEV_DF_DUMP)
 
 # sampling
-train_df_burst = train_df[train_df['label'] == 'burst']
-train_df_non_burst = train_df[train_df['label'] == 'non-burst']
+# train_df_burst = train_df[train_df['label'] == 'burst']
+# train_df_non_burst = train_df[train_df['label'] == 'non-burst']
 
 # expected_len = len(train_df_non_burst) * 3 // 7
 # train_df_burst = pd.concat([train_df_burst] * (expected_len // len(train_df_burst)), ignore_index=True)
 #
-train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
+# train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
 
-print(len(train_df[train_df['label'] == 'burst']))
-print(len(train_df[train_df['label'] == 'non-burst']))
+# print(len(train_df[train_df['label'] == 'burst']))
+# print(len(train_df[train_df['label'] == 'non-burst']))
 
 # load vocab
 user_vocab = Vocab(vocab_file=settings.USER_VOCAB_FN)
@@ -115,26 +115,41 @@ test_dl = DataLoader(
 
 # get embedding
 user_vectors = np.load(settings.USER_VECS_FN)
-user_vectors = np.concatenate((np.zeros((2, user_vectors.shape[1]), dtype=np.float), user_vectors), axis=0)
+user_vectors = np.concatenate((
+    user_vectors,
+    np.random.normal(loc=0, scale=1 / user_vectors.shape[1] ** 0.5, size=(1, user_vectors.shape[1])),
+    np.zeros((1, user_vectors.shape[1]), dtype=np.float),
+), axis=0)
 user_embedding = Embedding.from_pretrained(
-    vectors=user_vectors,
+    vectors=np.ascontiguousarray(user_vectors, dtype=np.float32),
     device=settings.DEVICE,
-    autograd=False,
+    autograd=True,
+    padding_index=user_vocab.padding_index,
 )
 
 sub_vectors = np.load(settings.SUB_VECS_FN)
-sub_vectors = np.concatenate((np.zeros((2, sub_vectors.shape[1]), dtype=np.float), sub_vectors), axis=0)
+sub_vectors = np.concatenate((
+    sub_vectors,
+    np.random.normal(loc=0, scale=1 / sub_vectors.shape[1] ** 0.5, size=(1, sub_vectors.shape[1])),
+    np.zeros((1, sub_vectors.shape[1]), dtype=np.float),
+), axis=0)
 sub_embedding = Embedding.from_pretrained(
-    vectors=sub_vectors,
+    vectors=np.ascontiguousarray(sub_vectors, dtype=np.float32),
     device=settings.DEVICE,
-    autograd=False,
+    autograd=True,
+    padding_index=sub_vocab.padding_index,
 )
 
-word_vectors = np.concatenate((np.zeros((2, word_vectors.shape[1]), dtype=np.float), word_vectors), axis=0)
+word_vectors = np.concatenate((
+    word_vectors,
+    np.random.normal(loc=0, scale=1 / word_vectors.shape[1] ** 0.5, size=(1, word_vectors.shape[1])),
+    np.zeros((1, word_vectors.shape[1]), dtype=np.float32),
+), axis=0)
 word_embedding = Embedding.from_pretrained(
-    vectors=word_vectors,
+    vectors=np.ascontiguousarray(word_vectors, dtype=np.float32),
     device=settings.DEVICE,
-    autograd=False,
+    autograd=True,
+    padding_index=word_vocab.padding_index,
 )
 
 # build model
@@ -142,14 +157,19 @@ model = RedditModel(
     user_embedding=user_embedding,
     sub_embedding=sub_embedding,
     word_embedding=word_embedding,
-    hidden_dim=300,
+    hidden_dim=64,
     output_dim=len(label_vocab),
     device=settings.DEVICE,
     p_dropout=0.5,
 )
 
 criterion = CrossEntropyLoss()
-optimizer = SGD(parameters=model.get_parameters(), lr=settings.LR)
+# criterion = BCEWithLogitsLoss()
+# optimizer = SGD(parameters=model.get_parameters(), lr=settings.LR, beta=0.9)
+optimizer = Adam(
+    parameters=model.get_parameters(),
+    lr=0.01,
+)
 
 # train
 epoch_bar = tqdm(range(settings.NUM_EPOCHS), position=0)
@@ -168,7 +188,7 @@ for epoch in epoch_bar:
         # epoch_losses.append(loss.data)
         total_train_loss += loss.data
         train_batch_bar.set_description(f'Train batch {i}: loss = {total_train_loss / (i + 1)}')
-    train_avg_loss = total_train_loss / (len(train_dl) + 1)
+    train_avg_loss = total_train_loss / len(train_dl)
     train_batch_bar.close()
 
     eval_preds = []
@@ -189,7 +209,7 @@ for epoch in epoch_bar:
         total_eval_loss += loss.data
         eval_batch_bar.set_description(f'Eval batch {i}: loss = {total_eval_loss / (i + 1)}')
 
-    eval_avg_loss = total_eval_loss / (len(dev_dl) + 1)
+    eval_avg_loss = total_eval_loss / len(dev_dl)
 
     acc = accuracy_score(y_true=eval_trues, y_pred=eval_preds)
     f1 = f1_score(y_true=eval_trues, y_pred=eval_preds, labels=[0, 1])

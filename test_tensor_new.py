@@ -263,7 +263,7 @@ def test_vocab():
     user_vectors = np.concatenate((np.zeros((2, user_vectors.shape[1]), dtype=np.float), user_vectors), axis=0)
     print(f'user vectors shape: {user_vectors.shape}')
     print('-' * 30)
-    
+
     sub_vocab = Vocab(vocab_file='data/prediction/embeddings/sub_vecs.vocab')
     print(f'sub vocab length: {len(sub_vocab)}')
     print([sub_vocab[i] for i in range(5)])
@@ -278,6 +278,53 @@ def test_vocab():
     print(f'word vocab length: {len(word_vocab)}')
     print([word_vocab[i] for i in range(5)])
     print(f'word vectors shape: {word_vectors.shape}')
+
+
+# test softmax
+def test_softmax():
+    data = np.random.rand(5, 2)
+    x_gpu = Tensor(data=data, device='cuda')
+    x_cpu = Tensor(data=data, device='cpu')
+
+    print(x_gpu.softmax())
+    print(x_cpu.softmax())
+
+
+# test dropout
+def test_dropout():
+    data = np.random.rand(70, 70)
+    x_gpu = Tensor(data=data, device='cuda')
+    x_dropout = x_gpu.dropout(0.1).cpu()
+    print(x_dropout)
+    print(x_dropout.shape)
+    print(np.sum(x_dropout.data == 0))
+
+
+def test_relu():
+    data = np.random.rand(10, 10) - 0.5
+    x_gpu = Tensor(data, device='cuda')
+    x_cpu = Tensor(data, device='cpu')
+    x_relu = x_gpu.relu()
+    print(x_relu)
+    print(x_relu.relu_grad())
+    print(np.sum(np.sum(x_relu.cpu().data == 0)))
+
+    # print(x_gpu.tanh())
+    # print((np.exp(data) - np.exp(-data))/(np.exp(data) + np.exp(-data)))
+
+    # print(x_gpu.sigmoid())
+    # print(1/(1 + np.exp(-data)))
+
+    # print(x_gpu.sigmoid_grad())
+    # print(data * (1 - data))
+
+
+def test_expand():
+    data = np.array([1, 2, 3])
+    x_gpu = Tensor(data, device='cuda')
+    x_cpu = Tensor(data, device='cpu')
+    print(x_gpu.expand(dim=1, copies=5))
+    print(x_cpu.expand(dim=1, copies=5))
 
 
 if __name__ == '__main__':
@@ -305,7 +352,19 @@ if __name__ == '__main__':
     # test_lstm_layer()
 
     # test build model
-    test_build_model()
+    # test_build_model()
 
     # test vocab
     # test_vocab()
+
+    # test softmax
+    # test_softmax()
+
+    # test dropout
+    # test_dropout()
+
+    # test relu
+    # test_relu()
+
+    # test expand
+    test_expand()

@@ -1,0 +1,15 @@
+1. Giới thiệu bài toán (Community interaction and conflict on the web)
+- Mục tiêu
+- Thuật toán (Social-LSTM)
+- Mô tả dữ liệu
+2. Cuda
+- Pycuda
+- skcuda
+3. Cài đặt
+- Cài đặt Tensor trên cpu (numpy array) và gpu (pycuda.gpuarray)
+- Các phép toán đối với Tensor gpu trên cuda (check tensor_new.py và operations.py, nhấn mạnh các kernel tự viết tanh, sigmoid,
+dropout, softmax, relu, dropout ...)
+- Cấu trúc model, tham số
+4. Kết quả cài đặt
+- Metrics
+- So sánh với paper

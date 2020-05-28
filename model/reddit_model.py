@@ -34,15 +34,15 @@ class RedditModel(Layer):
         )
 
         self.h2o = Sequential(layers=[
-            ReLu(),
-            Dropout(p=p_dropout),
+            # ReLu(),
+            # Dropout(p=p_dropout),
             Linear(
                 n_inputs=hidden_dim,
                 n_outputs=hidden_dim // 2,
                 bias=True,
                 device=device,
             ),
-            ReLu(),
+            Tanh(),
             Dropout(p=p_dropout),
             Linear(
                 n_inputs=hidden_dim // 2,

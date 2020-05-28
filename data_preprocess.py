@@ -103,16 +103,24 @@ if __name__ == '__main__':
     print('-' * 30)
 
     print('splitting train, dev, test')
-    burst_cross_label = cross_label_tokenized[cross_label_tokenized['label'] == 'burst']
-    non_burst_cross_label = cross_label_tokenized[cross_label_tokenized['label'] == 'non-burst']
-    train_burst, test_burst = train_test_split(burst_cross_label, test_size=0.2)
-    train_burst, dev_burst = train_test_split(train_burst, test_size=0.3)
-    train_non_burst, test_non_burst = train_test_split(non_burst_cross_label, test_size=0.2)
-    train_non_burst, dev_non_burst = train_test_split(train_non_burst, test_size=0.3)
-
-    train = shuffle(pd.concat((train_burst, train_non_burst), ignore_index=True))
-    test = shuffle(pd.concat((test_burst, test_non_burst), ignore_index=True))
-    dev = shuffle(pd.concat((dev_burst, dev_non_burst), ignore_index=True))
+    # burst_cross_label = cross_label_tokenized[cross_label_tokenized['label'] == 'burst']
+    # non_burst_cross_label = cross_label_tokenized[cross_label_tokenized['label'] == 'non-burst']
+    # train_burst, test_burst = train_test_split(burst_cross_label, test_size=0.2)
+    # train_burst, dev_burst = train_test_split(train_burst, test_size=0.3)
+    # train_non_burst, test_non_burst = train_test_split(non_burst_cross_label, test_size=0.2)
+    # train_non_burst, dev_non_burst = train_test_split(train_non_burst, test_size=0.3)
+    # 
+    # train = shuffle(pd.concat((train_burst, train_non_burst), ignore_index=True))
+    # test = shuffle(pd.concat((test_burst, test_non_burst), ignore_index=True))
+    # dev = shuffle(pd.concat((dev_burst, dev_non_burst), ignore_index=True))
+    
+    train_post_ids = pd.read_csv('data/dump/train_post_ids.csv', sep='\t')
+    val_post_ids = pd.read_csv('data/dump/val_post_ids.csv', sep='\t')
+    test_post_ids = pd.read_csv('data/dump/test_post_ids.csv', sep='\t')
+    train = cross_label_tokenized[cross_label_tokenized['source_post'].isin(train_post_ids['source_post'])]
+    test = cross_label_tokenized[cross_label_tokenized['source_post'].isin(test_post_ids['source_post'])]
+    dev = cross_label_tokenized[cross_label_tokenized['source_post'].isin(val_post_ids['source_post'])]
+    print(f'train_length = {len(train)}, test_length = {len(test)}, dev_length = {len(dev)}')
 
     if not os.path.exists(settings.TRAIN_DF_DUMP):
         with open(settings.TRAIN_DF_DUMP, mode='wb') as f:

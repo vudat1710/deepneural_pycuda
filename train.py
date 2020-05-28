@@ -36,7 +36,7 @@ train_df_non_burst = train_df[train_df['label'] == 'non-burst']
 # expected_len = len(train_df_non_burst) * 3 // 7
 # train_df_burst = pd.concat([train_df_burst] * (expected_len // len(train_df_burst)), ignore_index=True)
 #
-train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 1.3)), train_df_burst), ignore_index=True))
+train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 3.5)), train_df_burst), ignore_index=True))
 
 # print(len(train_df[train_df['label'] == 'burst']))
 # print(len(train_df[train_df['label'] == 'non-burst']))
@@ -160,7 +160,7 @@ model = RedditModel(
     hidden_dim=64,
     output_dim=len(label_vocab),
     device=settings.DEVICE,
-    p_dropout=0.2,
+    p_dropout=0.1,
 )
 
 criterion = CrossEntropyLoss()
@@ -168,7 +168,7 @@ criterion = CrossEntropyLoss()
 # optimizer = SGD(parameters=model.get_parameters(), lr=settings.LR, beta=0.9)
 optimizer = Adam(
     parameters=model.get_parameters(),
-    lr=0.01,
+    lr=0.001,
 )
 
 # train
@@ -184,19 +184,15 @@ for epoch in epoch_bar:
         output = model(x)
         loss = criterion(output, target=y)
         loss.backward()
-        num_one = np.sum(output.argmax(dim=1).cpu().data, axis=0)
-        # if num_one == 0.:
-        #     print(model.h2o.layers[-1].weight)
         optimizer.step(zero=True)
-        # epoch_losses.append(loss.data)
         total_train_loss += loss.data
         train_batch_bar.set_description(f'Train batch {i}: loss = {total_train_loss / (i + 1)}')
     train_avg_loss = total_train_loss / len(train_dl)
     train_batch_bar.close()
 
+    # eval dev
     eval_preds = []
     eval_trues = []
-    # eval_losses = []
     total_eval_loss = 0
     model.eval()
     eval_batch_bar = tqdm(dev_dl, position=1)
@@ -208,7 +204,6 @@ for epoch in epoch_bar:
         preds = output.argmax(dim=1).cpu().data.astype(np.int32)
         eval_preds.extend(preds)
         eval_trues.extend(y.cpu().data)
-        # eval_losses.append(loss.data)
         total_eval_loss += loss.data
         eval_batch_bar.set_description(f'Eval batch {i}: loss = {total_eval_loss / (i + 1)}')
 
@@ -219,11 +214,31 @@ for epoch in epoch_bar:
     auc_score = roc_auc_score(y_true=eval_trues, y_score=np.concatenate(eval_outputs, axis=0)[:, 1])
     eval_batch_bar.close()
 
-    # train_batch_bar.reset()
-    # eval_batch_bar.reset()
+    # eval test
+    test_preds = []
+    test_trues = []
+    total_test_loss = 0
+    model.eval()
+    test_batch_bar = tqdm(test_dl, position=1)
+    test_outputs = []
+    for i, (x, y) in enumerate(test_batch_bar):
+        output = model(x)
+        test_outputs.append(output.cpu().data)
+        loss = criterion(output, target=y)
+        preds = output.argmax(dim=1).cpu().data.astype(np.int32)
+        test_preds.extend(preds)
+        test_trues.extend(y.cpu().data)
+        total_test_loss += loss.data
+        test_batch_bar.set_description(f'Test batch {i}: loss = {total_test_loss / (i + 1)}')
 
-    # epoch_bar.write(f'Epoch {epoch}: \ntrain_avg_loss = {np.average(epoch_losses)}\r')
-    # epoch_bar.write(f'Eval: avg_loss = {np.average(eval_losses)}, accuracy = {acc}, f1_score = {f1}\r')
+    test_avg_loss = total_test_loss / len(test_dl)
+
+    test_acc = accuracy_score(y_true=test_trues, y_pred=test_preds)
+    test_f1 = f1_score(y_true=test_trues, y_pred=test_preds, labels=[0, 1])
+    test_auc_score = roc_auc_score(y_true=test_trues, y_score=np.concatenate(test_outputs, axis = 0)[:, 1])
+    test_batch_bar.close()
+
     epoch_bar.write(f'Epoch {epoch}: \ntrain_avg_loss = {train_avg_loss}\r')
     epoch_bar.write(f'Eval: avg_loss = {eval_avg_loss}, accuracy = {acc}, f1_score = {f1}, auc_score = {auc_score}\r')
+    epoch_bar.write( f'Test: avg_loss = {test_avg_loss}, accuracy = {test_acc}, f1_  score = {test_f1}, auc_score = {test_auc_score}\r')
     epoch_bar.write('-' * 30)

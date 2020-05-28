@@ -138,7 +138,7 @@ if __name__ == '__main__':
     user_vocab = Vocab(vocab_file=settings.USER_VOCAB_FN)
     sub_vocab = Vocab(vocab_file=settings.SUB_VOCAB_FN)
     words, word_vecs = load_glove_emb(fn=settings.GLOVE_EMBEDDING_FN)
-    word_vocab = Vocab(words=words)
+    word_vocab = Vocab(words=list(range(len(words))))
     label_vocab = Vocab(words=['non-burst', 'burst'])
 
     ds = RedditDataset(

@@ -323,8 +323,8 @@ def test_expand():
     data = np.array([1, 2, 3])
     x_gpu = Tensor(data, device='cuda')
     x_cpu = Tensor(data, device='cpu')
-    print(x_gpu.expand(dim=1, copies=5))
-    print(x_cpu.expand(dim=1, copies=5))
+    print(x_gpu.expand(dim=0, copies=5))
+    print(x_cpu.expand(dim=0, copies=5))
     print('norm', x_gpu.norm())
 
 
@@ -376,6 +376,16 @@ def test_gpu_vs_cpu():
     print(embedding_cpu.weight.grad)
 
 
+def test_index_select_v2():
+    x_cpu = np.random.rand(8, 5)
+    x = Tensor(x_cpu, device='cuda', autograd=True)
+    indices = Tensor([[1, 2, 3], [0, 0, 0]], device='cuda', d_type=np.int32)
+    embs = x.index_selectv2(indices)
+    print(x)
+    print(embs)
+    # print(x_cpu[[1, 2, 3]])
+
+
 if __name__ == '__main__':
     # test basic op
     # x = Tensor([1, 2, 3], device='cuda', autograd=True)
@@ -418,4 +428,6 @@ if __name__ == '__main__':
     # test expand
     # test_expand()
 
-    test_gpu_vs_cpu()
+    # test_gpu_vs_cpu()
+
+    test_index_select_v2()

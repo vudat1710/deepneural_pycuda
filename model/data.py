@@ -67,10 +67,10 @@ class CollateFn:
         xs, ys = zip(*data)
         source_subs, target_subs, users, contents = zip(*xs)
         return (
-            (Tensor(users, device='cpu', d_type=np.int32),
-             Tensor(source_subs, device='cpu', d_type=np.int32),
-             Tensor(target_subs, device='cpu', d_type=np.int32),
-             Tensor(self.padding_collate(contents, padding_index=self.word_padding_index), device='cpu',
+            (Tensor(users, device='cuda', d_type=np.int32),
+             Tensor(source_subs, device='cuda', d_type=np.int32),
+             Tensor(target_subs, device='cuda', d_type=np.int32),
+             Tensor(self.padding_collate(contents, padding_index=self.word_padding_index), device='cuda',
                     d_type=np.int32),
              ),
             Tensor(ys, device='cpu', d_type=np.int32, autograd=True)

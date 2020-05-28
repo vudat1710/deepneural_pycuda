@@ -167,7 +167,10 @@ class Tensor:
                     self.creators[0].backward(grad_relu, grad_origin=self)
                 elif self.creator_op == "index_select":
                     new_grad = self.zeros_like(self.creators[0])
-                    indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
+                    if self.device == 'cuda':
+                        indices_ = self.__getattribute__("index_select_indices").data.get().flatten().tolist()
+                    else:
+                        indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
                     padding_index = self.__getattribute__('padding_index')
                     grad_ = grad.reshape((len(indices_), -1))
                     for i in range(len(indices_)):
@@ -471,6 +474,29 @@ class Tensor:
             gpuarray._memcpy_discontig(dst=data[i], src=self.data[index])
         return data
 
+    def index_selectv2(self, indices, device=None):
+        assert self.device == indices.device
+        if self.device == 'cuda':
+            data = indices_select(self.data, indices.data)
+        else:
+            data = self.data[indices.data]
+
+        if self.autograd:
+            new = Tensor(
+                data=data,
+                autograd=True,
+                creators=[self],
+                creation_op="index_select",
+                device=self.device if device is None else device,
+            )
+            new.index_select_indices = indices
+            return new
+        return Tensor(
+            data=data,
+            autograd=True,
+            device=self.device if device is None else device,
+        )
+
     def softmax(self):
         if self.device == 'cuda':
             # data = softmax_gpu(self.data)
@@ -532,7 +558,7 @@ class Tensor:
             )
             loss_tensor.dx = dx
             return loss_tensor
-        return Tensor(data=dx.mean(), device=self.device,)
+        return Tensor(data=dx.mean(), device=self.device, )
 
     def argmax(self, dim):
         if self.device == 'cuda':
@@ -564,12 +590,18 @@ class Tensor:
         return self
 
     def __getitem__(self, i):
-        # assert 0 <= i < self.data.shape[0], 'out of index'
-        return Tensor(
+        item = Tensor(
             data=self.data[i],
             autograd=self.autograd,
             device=self.device,
+            creators=self.creators,
+            creation_op=self.creator_op,
         )
+        if hasattr(self, 'padding_index') and hasattr(self, 'index_select_indices'):
+            item.padding_index = self.padding_index
+            item.index_select_indices = self.index_select_indices[i]
+
+        return item
 
     def __setitem__(self, index, value):
         assert 0 <= index < self.data.shape[0], 'out of index'
@@ -858,16 +890,18 @@ class Embedding(Layer):
 
     def forward(self, input):
         assert len(input.shape) in [1, 2]
-        if len(input.shape) == 1:
-            data = self.weight.index_select(input, device=self.device)
-            data.padding_index = self.padding_index
-        else:
-            data = [
-                self.weight.index_select(input[i], device=self.device)
-                for i in range(input.shape[0])
-            ]
-            for item in data:
-                item.padding_index = self.padding_index
+        # if len(input.shape) == 1:
+        #     data = self.weight.index_select(input, device=self.device)
+        #     data.padding_index = self.padding_index
+        # else:
+        #     data = [
+        #         self.weight.index_select(input[i], device=self.device)
+        #         for i in range(input.shape[0])
+        #     ]
+        #     for item in data:
+        #         item.padding_index = self.padding_index
+        data = self.weight.index_selectv2(input)
+        data.padding_index = self.padding_index
         return data
 
     def __call__(self, input):
@@ -1026,11 +1060,11 @@ class LSTMLayer(Layer):
             device=device,
         )
 
-    def forward(self, inputs: list):
+    def forward(self, inputs):
         hidden = None
         outputs = []
-        for input in inputs:
-            output, hidden = self.lstm_cell(input, hidden)
+        for i in range(len(inputs)):
+            output, hidden = self.lstm_cell(inputs[i], hidden)
             outputs.append(output)
         return outputs, hidden
 

@@ -453,6 +453,19 @@ expand_dim1_double_ker = ElementwiseKernel(
     name="expand_dim1_double_ker",
 )
 
+expand_dim1_v2_template = "%(p)s *out, %(p)s *inp, int copies"
+expand_dim1_float_v2_ker = ElementwiseKernel(
+    arguments=expand_dim1_v2_template % {'p': 'float'},
+    operation="out[i] = inp[i / copies]",
+    name="expand_dim1_float_v2",
+)
+
+expand_dim1_double_v2_ker = ElementwiseKernel(
+    arguments=expand_dim1_v2_template % {'p': 'double'},
+    operation="out[i] = inp[i / copies]",
+    name="expand_dim1_double_v2",
+)
+
 expand_dim0_template = "%(p)s *in, %(p)s *out, int copies, int width"
 expand_dim0_float_ker = ElementwiseKernel(
     arguments=expand_dim0_template % {'p': 'float'},
@@ -465,26 +478,61 @@ expand_dim0_double_ker = ElementwiseKernel(
     name="expand_dim0_double_ker",
 )
 
+expand_dim0_v2_template = "%(p)s *out, %(p)s *inp, int width"
+expand_dim0_float_v2_ker = ElementwiseKernel(
+    arguments=expand_dim0_v2_template % {'p': 'float'},
+    operation="out[i] = inp[i % width]",
+    name="expand_dim0_float_v2",
+)
+expand_dim0_double_v2_ker = ElementwiseKernel(
+    arguments=expand_dim0_v2_template % {'p': 'double'},
+    operation="out[i] = inp[i % width]",
+    name="expand_dim0_double_v2",
+)
+
 expand_ker = {
-    0: {
-        np.float32: expand_dim0_float_ker,
-        np.float64: expand_dim0_double_ker,
+    "v1": {
+        0: {
+            np.float32: expand_dim0_float_ker,
+            np.float64: expand_dim0_double_ker,
+        },
+        1: {
+            np.float32: expand_dim1_float_ker,
+            np.float64: expand_dim1_double_ker,
+        }
     },
-    1: {
-        np.float32: expand_dim1_float_ker,
-        np.float64: expand_dim1_double_ker,
+    "v2": {
+        0: {
+            np.float32: expand_dim0_float_v2_ker,
+            np.float64: expand_dim0_double_v2_ker,
+        },
+        1: {
+            np.float32: expand_dim1_float_v2_ker,
+            np.float64: expand_dim1_double_v2_ker,
+        }
     }
 }
 
 
-def expand_gpu(x: gpuarray.GPUArray, dim: int, copies):
-    expand_func = expand_ker[dim][x.dtype.type]
+def expand_gpu_v1(x: gpuarray.GPUArray, dim: int, copies):
+    expand_func = expand_ker["v1"][dim][x.dtype.type]
     if dim == 0:
         y = gpuarray.empty((copies, x.shape[0]), dtype=x.dtype)
         expand_func(x, y, np.int32(copies), np.int32(x.shape[0]))
     else:
         y = gpuarray.empty((x.shape[0], copies), dtype=x.dtype)
         expand_func(x, y, np.int32(copies))
+    return y
+
+
+def expand_gpu(x: gpuarray.GPUArray, dim: int, copies):
+    expand_func = expand_ker["v2"][dim][x.dtype.type]
+    if dim == 0:
+        y = gpuarray.empty((copies, x.shape[0]), dtype=x.dtype)
+        expand_func(y, x, np.int32(x.shape[0]))
+    else:
+        y = gpuarray.empty((x.shape[0], copies), dtype=x.dtype)
+        expand_func(y, x, np.int32(copies))
     return y
 
 
@@ -585,6 +633,36 @@ norm_ker = {
 def norm_gpu(x: gpuarray.GPUArray):
     norm_func = norm_ker[x.dtype.type]
     return norm_func(x).get() ** 0.5
+
+
+# embedding indices select
+indices_select_ker_template = "%(p)s *out, int *indices, %(p)s *embedding, int embedding_dim"
+indices_select_float_ker = ElementwiseKernel(
+    arguments=indices_select_ker_template % {'p': 'float'},
+    operation="""
+        int vec_i = i / embedding_dim;
+        int pos_in_vec = i % embedding_dim;
+        out[i] = embedding[indices[vec_i] * embedding_dim + pos_in_vec];
+        """,
+    name="index_select",
+)
+
+indices_select_double_ker = ElementwiseKernel(
+    arguments=indices_select_ker_template % {'p': 'double'},
+    operation="""
+        int vec_i = i / embedding_dim;
+        int pos_in_vec = i % embedding_dim;
+        out[i] = embedding[indices[vec_i] * embedding_dim + pos_in_vec];
+        """,
+    name="index_select_double_ker",
+)
+
+
+def indices_select(embedding: gpuarray.GPUArray, indices: gpuarray.GPUArray):
+    indices_select_func = indices_select_float_ker if embedding.dtype == np.float32 else indices_select_double_ker
+    y = gpuarray.empty((*indices.shape, embedding.shape[1]), dtype=embedding.dtype)
+    indices_select_func(y, indices, embedding, np.int32(embedding.shape[1]))
+    return y
 
 
 # loss

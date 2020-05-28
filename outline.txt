@@ -7,8 +7,25 @@
 - skcuda
 3. Cài đặt
 - Cài đặt Tensor trên cpu (numpy array) và gpu (pycuda.gpuarray)
-- Các phép toán đối với Tensor gpu trên cuda (check tensor_new.py và operations.py, nhấn mạnh các kernel tự viết tanh, sigmoid,
-dropout, softmax, relu, dropout ...)
+    + Các phép toán cơ bản: add, subtract, matmul, dot product, sum, transpose, argmax sử dụng module có sẵn của skcuda
+    + Các phép toán cho activation func: sigmoid + sigmoid_grad, tanh + tanh_grad, relu + relu_grad (viết các kernel trên pycuda)
+    + Phép toán cho output func: softmax (viết kernel trên pycuda)
+    + Loss: CrossEntropy
+    + Indices select: (sử dụng cho embedding) viết kernel trên pycuda (sử dụng element wise kernel)
+    + dropout: (sủ dụng cho layer dropout) viết kernel trên pycuda, sử dụng cuRand với phân phối uniform (curand_uniform)
+    + expand: viết kernel element wise
+
+    + backward: Với mỗi một phép toán, tính tương ứng đạo hàm với phép toán đó và backgrad lại cho các tensor tạo nên nó.
+- Cài đặt các layer:
+    + Activation: Tanh, Sigmoid, ReLu
+    + Linear, LSTM, Sequential
+    + Embedding
+    + dropout: Dropout
+    + Loss: CrossEntropy
+    + Optimizer: SGD, Adam
+
+- Xây dựng mô hình từ Tensor và các Layer cài đặt.
+
 - Cấu trúc model, tham số
 4. Kết quả cài đặt
 - Metrics

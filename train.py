@@ -99,7 +99,7 @@ test_dl = DataLoader(
     dataset=test_ds,
     batch_size=settings.TEST_BS,
     shuffle=True,
-    drop_last=True,
+    drop_last=False,
     collate_fn=collate_fn,
 )
 

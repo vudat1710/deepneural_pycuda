@@ -292,9 +292,10 @@ def test_softmax():
 
 # test dropout
 def test_dropout():
-    data = np.random.rand(70, 70)
+    data = np.random.rand(10, 10)
     x_gpu = Tensor(data=data, device='cuda')
     x_dropout = x_gpu.dropout(0.1).cpu()
+    print(x_gpu)
     print(x_dropout)
     print(x_dropout.shape)
     print(np.sum(x_dropout.data == 0))
@@ -420,7 +421,7 @@ if __name__ == '__main__':
     # test_softmax()
 
     # test dropout
-    # test_dropout()
+    test_dropout()
 
     # test relu
     # test_relu()
@@ -430,4 +431,4 @@ if __name__ == '__main__':
 
     # test_gpu_vs_cpu()
 
-    test_index_select_v2()
+    # test_index_select_v2()

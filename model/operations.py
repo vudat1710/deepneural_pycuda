@@ -132,63 +132,38 @@ relu_grad_double_ker = ElementwiseKernel(
 )
 
 # random kernel
-random_1d_ker_template = """
+
+random_ker_template = """
 #include <curand_kernel.h>
 #define ULL unsigned long long
 extern "C" {
-    __global__ void random_1d_%(p)s_array(%(p)s *arr, %(p)s p) {
-    curandState cr_state; 
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
-
-    %(p)s x = curand_uniform%(p_curand)s(&cr_state);  
-    if (x < p) arr[tid] = 0;
-    else arr[tid] = 1.0 / (1 - p);
-    return;
+    __global__ void random_%(p)s_array(%(p)s *arr, int array_len, %(p)s p) {
+        curandState cr_state; 
+        int tid = blockIdx.x * blockDim.x + threadIdx.x;
+        int num_iters = (array_len - 1) / blockDim.x + 1;
+        curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
+        %(p)s x;
+        for (int j = 0; j < num_iters; j++) {
+            int i = j * blockDim.x + tid;
+            if (i < array_len) {
+                x = curand_uniform%(p_curand)s(&cr_state);
+                if (x < p) arr[i] = 0;
+                else arr[i] = 1.0 / (1 - p);
+            }
+        }
     }
 }
 """
 
-random_1d_float_func = SourceModule(
+random_float_func = SourceModule(
     no_extern_c=True,
-    source=random_1d_ker_template % {'p': 'float', 'p_curand': ''},
-).get_function('random_1d_float_array')
+    source=random_ker_template % {'p': 'float', 'p_curand': ''}
+).get_function('random_float_array')
 
-random_1d_double_func = SourceModule(
+random_double_func = SourceModule(
     no_extern_c=True,
-    source=random_1d_ker_template % {'p': 'double', 'p_curand': '_double'},
-).get_function('random_1d_double_array')
-
-# 2d
-
-random_2d_ker_template = """
-#include <curand_kernel.h>
-#define ULL unsigned long long
-extern "C" {
-    __global__ void random_2d_%(p)s_array(%(p)s *arr, int dim, %(p)s p) {
-    curandState cr_state; 
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int col = blockIdx.y * blockDim.y + threadIdx.y;
-    int tid = row * dim + col;
-    curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
-
-    %(p)s x = curand_uniform%(p_curand)s(&cr_state);  
-    if (x < p) arr[tid] = 0;
-    else arr[tid] = 1.0 / (1 - p);
-    return;
-    }
-}
-"""
-
-random_2d_float_func = SourceModule(
-    no_extern_c=True,
-    source=random_2d_ker_template % {'p': 'float', 'p_curand': ''}
-).get_function('random_2d_float_array')
-
-random_2d_double_func = SourceModule(
-    no_extern_c=True,
-    source=random_2d_ker_template % {'p': 'double', 'p_curand': '_double'}
-).get_function('random_2d_double_array')
+    source=random_ker_template % {'p': 'double', 'p_curand': '_double'}
+).get_function('random_double_array')
 
 random_lstm_ker_template = """
 #include <curand_kernel.h>
@@ -550,42 +525,20 @@ def square_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
     return y
 
 
-random_ker = {
-    1: {
-        np.float32: random_1d_float_func,
-        np.float64: random_1d_double_func,
-    },
-    2: {
-        np.float32: random_2d_float_func,
-        np.float64: random_2d_double_func,
-    }
-}
-
-
 def dropout_mask_gpu(x: gpuarray.GPUArray, p=0.):
     assert x.dtype in [np.int32, np.float32, np.float64], 'invalid dtype'
     assert len(x.shape) in [1, 2], 'invalid number of dims'
     mask = gpuarray.empty_like(x)
-    random_func = random_ker[len(x.shape)][x.dtype.type]
-    if len(x.shape) == 1:
-        random_func(mask, x.dtype.type(p), block=(x.shape[0], 1, 1), grid=(1, 1, 1))
-    else:
-        # random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(mask.shape[1]), x.dtype.type(p), block=(32, 32, 1),
-                    grid=((x.shape[0] - 1) // 32 + 1, (x.shape[1] - 1) // 32 + 1, 1))
+    random_func = random_float_func if x.dtype == np.float32 else random_double_func
+    random_func(mask, np.int32(mask.size), x.dtype.type(p), block=(mask.size if mask.size < 1024 else 1024, 1, 1), grid=(1, 1, 1))
     return mask
 
 
 def get_mask_gpu(shape, dtype=np.float32, p=0.):
     assert len(shape) in [1, 2], 'invalid number of dims'
     mask = gpuarray.empty(shape=shape, dtype=dtype)
-    random_func = random_ker[len(shape)][dtype]
-    if len(shape) == 1:
-        random_func(mask, dtype(p), block=(shape[0], 1, 1), grid=(1, 1, 1))
-    else:
-        # random_func(mask, np.int32(shape[1]), np.float32(p), block=(*shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(shape[1]), dtype(p), block=(32, 32, 1),
-                    grid=((shape[0] - 1) // 32 + 1, (shape[1] - 1) // 32 + 1, 1))
+    random_func = random_float_func if x.dtype == np.float32 else random_double_func
+    random_func(mask, np.int32(mask.size), dtype(p), block=(mask.size if mask.size < 1024 else 1024, 1, 1), grid=(1, 1, 1))
     return mask
 
 

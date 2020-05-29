@@ -168,7 +168,7 @@ criterion = CrossEntropyLoss()
 # optimizer = SGD(parameters=model.get_parameters(), lr=settings.LR, beta=0.9)
 optimizer = Adam(
     parameters=model.get_parameters(),
-    lr=0.001,
+    lr=0.0012,
 )
 
 # train
@@ -209,8 +209,8 @@ for epoch in epoch_bar:
 
     eval_avg_loss = total_eval_loss / len(dev_dl)
 
-    acc = accuracy_score(y_true=eval_trues, y_pred=eval_preds)
-    f1 = f1_score(y_true=eval_trues, y_pred=eval_preds, labels=[0, 1])
+    #acc = accuracy_score(y_true=eval_trues, y_pred=eval_preds)
+    #f1 = f1_score(y_true=eval_trues, y_pred=eval_preds, labels=[0, 1])
     auc_score = roc_auc_score(y_true=eval_trues, y_score=np.concatenate(eval_outputs, axis=0)[:, 1])
     eval_batch_bar.close()
 
@@ -233,12 +233,12 @@ for epoch in epoch_bar:
 
     test_avg_loss = total_test_loss / len(test_dl)
 
-    test_acc = accuracy_score(y_true=test_trues, y_pred=test_preds)
-    test_f1 = f1_score(y_true=test_trues, y_pred=test_preds, labels=[0, 1])
+    #test_acc = accuracy_score(y_true=test_trues, y_pred=test_preds)
+    #test_f1 = f1_score(y_true=test_trues, y_pred=test_preds, labels=[0, 1])
     test_auc_score = roc_auc_score(y_true=test_trues, y_score=np.concatenate(test_outputs, axis = 0)[:, 1])
     test_batch_bar.close()
 
     epoch_bar.write(f'Epoch {epoch}: \ntrain_avg_loss = {train_avg_loss}\r')
-    epoch_bar.write(f'Eval: avg_loss = {eval_avg_loss}, accuracy = {acc}, f1_score = {f1}, auc_score = {auc_score}\r')
-    epoch_bar.write( f'Test: avg_loss = {test_avg_loss}, accuracy = {test_acc}, f1_  score = {test_f1}, auc_score = {test_auc_score}\r')
+    epoch_bar.write(f'Eval: avg_loss = {eval_avg_loss}, auc_score = {auc_score}\r')
+    epoch_bar.write( f'Test: avg_loss = {test_avg_loss}, auc_score = {test_auc_score}\r')
     epoch_bar.write('-' * 30)

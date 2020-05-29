@@ -170,14 +170,20 @@ class Tensor:
                     if self.device == 'cuda':
                         indices_ = self.__getattribute__("index_select_indices").data.get().flatten().tolist()
                     else:
-                        indices_ = self.__getattribute__("index_select_indices").data.flatten().tolist()
+                        indices_ = self.__getattribute__("index_select_indices").data.flatten().astype(np.int)
                     padding_index = self.__getattribute__('padding_index')
                     grad_ = grad.reshape((len(indices_), -1))
-                    for i in range(len(indices_)):
-                        # new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
-                        if indices_[i] != padding_index:
-                            # new_grad.data[indices_[i]] += grad_.data[i]
-                            add_(new_grad.data[indices_[i]], grad_.data[i])
+                    if self.device == 'cuda':
+                        for i in range(len(indices_)):
+                            # new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
+                            if indices_[i] != padding_index:
+                                # new_grad.data[indices_[i]] += grad_.data[i]
+                                add_(new_grad.data[indices_[i]], grad_.data[i])
+                    else:
+                        for i in range(len(indices_)):
+                            if indices_[i] != padding_index:
+                                new_grad.data[indices_[i]] += grad_.data[i]
+
                     self.creators[0].backward(new_grad, grad_origin=self)
                 elif self.creator_op == "cross_entropy":
                     dx = self.__getattribute__("softmax_output") - self.__getattribute__("target_dist")

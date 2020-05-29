@@ -3,6 +3,7 @@ from model.vocab import Vocab
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
+import settings
 
 
 class RedditDataset(Dataset):
@@ -67,10 +68,10 @@ class CollateFn:
         xs, ys = zip(*data)
         source_subs, target_subs, users, contents = zip(*xs)
         return (
-            (Tensor(users, device='cuda', d_type=np.int32),
-             Tensor(source_subs, device='cuda', d_type=np.int32),
-             Tensor(target_subs, device='cuda', d_type=np.int32),
-             Tensor(self.padding_collate(contents, padding_index=self.word_padding_index), device='cuda',
+            (Tensor(users, device=settings.DEVICE, d_type=np.int32),
+             Tensor(source_subs, device=settings.DEVICE, d_type=np.int32),
+             Tensor(target_subs, device=settings.DEVICE, d_type=np.int32),
+             Tensor(self.padding_collate(contents, padding_index=self.word_padding_index), device=settings.DEVICE,
                     d_type=np.int32),
              ),
             Tensor(ys, device='cpu', d_type=np.int32, autograd=True)

@@ -32,7 +32,7 @@ DEV_BS = 512
 DEVICE = 'cuda'
 
 # num epochs
-NUM_EPOCHS = 10
+NUM_EPOCHS = 1
 
 # learning rate
-LR = 0.005
+LR = 0.0011

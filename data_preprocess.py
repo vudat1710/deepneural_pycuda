@@ -159,4 +159,13 @@ if __name__ == '__main__':
         if i == 10: break
         users, source_subs, target_subs, contents = x
         print(users.shape, source_subs.shape, target_subs.shape, contents.shape, y.shape)
+        print('-' * 30 + 'user' + '-' * 30)
+        print(users)
+        print('-' * 30 + 'source subs' + '-' * 30)
+        print(source_subs)
+        print('-' * 30 + 'target subs' + '-' * 30)
+        print(target_subs)
+        print('-' * 30 + 'y' + '-' * 30)
+        print(y)
+
 

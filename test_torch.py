@@ -58,8 +58,8 @@ if __name__ == '__main__':
     )
 
     model = model.cuda()
-    x = torch.Tensor([[*range(i, i + 20)] for i in range(20)]).long().cuda()
-    target = torch.Tensor(np.random.randint(0, 10, 20)).long().cuda()
+    x = torch.Tensor([[*range(i, i + 512)] for i in range(53)]).long().cuda()
+    target = torch.Tensor(np.random.randint(0, 10, 512)).long().cuda()
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(params=model.parameters(), lr=1e-2)

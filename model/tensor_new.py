@@ -176,7 +176,8 @@ class Tensor:
                     for i in range(len(indices_)):
                         # new_grad[indices_[i]] += grad_[i].to(self.creators[0].device)
                         if indices_[i] != padding_index:
-                            new_grad.data[indices_[i]] += grad_.data[i]
+                            # new_grad.data[indices_[i]] += grad_.data[i]
+                            add_(new_grad.data[indices_[i]], grad_.data[i])
                     self.creators[0].backward(new_grad, grad_origin=self)
                 elif self.creator_op == "cross_entropy":
                     dx = self.__getattribute__("softmax_output") - self.__getattribute__("target_dist")
@@ -783,27 +784,47 @@ class Adam:
                     "t": 0,
                     "mean": Tensor.zeros_like(p.grad).data,
                     "var": Tensor.zeros_like(p.grad).data,
+                    "grad": Tensor.zeros_like(p.grad).data,
                 }
 
             t = np.inf if self.clip_norm is None else self.clip_norm
             grad_norm = p.grad.norm()
             if grad_norm > t:
-                p.grad.data = p.grad.data * t / grad_norm
+                p.grad.data = p.grad.data * (t / grad_norm)
 
             t = self.cache[p.tensor_id]["t"] + 1
             var = self.cache[p.tensor_id]["var"]
             mean = self.cache[p.tensor_id]["mean"]
+            grad = self.cache[p.tensor_id]["grad"]
 
             self.cache[p.tensor_id]["t"] = t
-            self.cache[p.tensor_id]["var"] = self.decay2 * var + (1 - self.decay2) * p.grad.data ** 2
-            self.cache[p.tensor_id]["mean"] = self.decay1 * mean + (1 - self.decay1) * p.grad.data
+            if p.device == 'cuda':
+                self.cache[p.tensor_id]["var"] = adam_var(var, p.grad.data, d2=self.decay2, out=var)
+                self.cache[p.tensor_id]["mean"] = adam_mean(mean, p.grad.data, d1=self.decay1, out=mean)
 
-            v_hat = self.cache[p.tensor_id]["var"] / (1 - self.decay2 ** t)
-            m_hat = self.cache[p.tensor_id]["mean"] / (1 - self.decay1 ** t)
-            grad = m_hat / (v_hat ** 0.5 + self.eps)
-            p.data -= self.lr * grad
-            if zero:
-                p.grad.data *= 0
+                grad = adam_grad(
+                    mean=self.cache[p.tensor_id]["mean"],
+                    var=self.cache[p.tensor_id]["var"],
+                    d1=self.decay1,
+                    d2=self.decay2,
+                    eps=self.eps,
+                    t=t,
+                    out=grad,
+                )
+                sub_(x=p.data, y=grad, c=self.lr)
+                if zero:
+                    zero_(p.grad.data)
+            else:
+                self.cache[p.tensor_id]["var"] = self.decay2 * var + (1 - self.decay2) * p.grad.data ** 2
+                self.cache[p.tensor_id]["mean"] = self.decay1 * mean + (1 - self.decay1) * p.grad.data
+
+                v_hat = self.cache[p.tensor_id]["var"] / (1 - self.decay2 ** t)
+                m_hat = self.cache[p.tensor_id]["mean"] / (1 - self.decay1 ** t)
+                grad = m_hat / (v_hat ** 0.5 + self.eps)
+
+                p.data -= self.lr * grad
+                if zero:
+                    p.grad.data *= 0
 
 
 class Linear(Layer):

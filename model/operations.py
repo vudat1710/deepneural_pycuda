@@ -24,12 +24,18 @@ sigmoid_double_ker = ElementwiseKernel(
 
 tanh_float_ker = ElementwiseKernel(
     f"float *Y, float *x",
-    "Y[i] = (exp (x[i]) - exp (-x[i])) / (exp (x[i]) + exp (-x[i]))",
+    """
+    Y[i] = tanh(x[i])
+    """,
     "tanh_float")
 
 tanh_double_ker = ElementwiseKernel(
     f"double *Y, double *x",
-    "Y[i] = (exp (x[i]) - exp (-x[i])) / (exp (x[i]) + exp (-x[i]))",
+    """
+    double pos_exp = exp (x[i]);
+    double neg_exp = exp (-x[i]);
+    Y[i] = (pos_exp - neg_exp) / (pos_exp + neg_exp)
+    """,
     "tanh_double"
 )
 
@@ -130,32 +136,27 @@ random_1d_ker_template = """
 #include <curand_kernel.h>
 #define ULL unsigned long long
 extern "C" {
-    __global__ void random_1d_%(p)s_array(%(p)s *arr, float p) {
+    __global__ void random_1d_%(p)s_array(%(p)s *arr, %(p)s p) {
     curandState cr_state; 
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
 
-    float x = curand_uniform(&cr_state);  
+    %(p)s x = curand_uniform%(p_curand)s(&cr_state);  
     if (x < p) arr[tid] = 0;
-    else arr[tid] = 1;
+    else arr[tid] = 1.0 / (1 - p);
     return;
     }
 }
 """
 
-random_1d_int_func = SourceModule(
-    no_extern_c=True,
-    source=random_1d_ker_template % {'p': 'int'},
-).get_function('random_1d_int_array')
-
 random_1d_float_func = SourceModule(
     no_extern_c=True,
-    source=random_1d_ker_template % {'p': 'float'},
+    source=random_1d_ker_template % {'p': 'float', 'p_curand': ''},
 ).get_function('random_1d_float_array')
 
 random_1d_double_func = SourceModule(
     no_extern_c=True,
-    source=random_1d_ker_template % {'p': 'double'},
+    source=random_1d_ker_template % {'p': 'double', 'p_curand': '_double'},
 ).get_function('random_1d_double_array')
 
 # 2d
@@ -164,16 +165,16 @@ random_2d_ker_template = """
 #include <curand_kernel.h>
 #define ULL unsigned long long
 extern "C" {
-    __global__ void random_2d_%(p)s_array(%(p)s *arr, int dim, float p) {
+    __global__ void random_2d_%(p)s_array(%(p)s *arr, int dim, %(p)s p) {
     curandState cr_state; 
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
     int tid = row * dim + col;
     curand_init( (ULL) clock() + (ULL) tid, (ULL) 0, (ULL) 0, &cr_state);
 
-    float x = curand_uniform(&cr_state);  
+    %(p)s x = curand_uniform%(p_curand)s(&cr_state);  
     if (x < p) arr[tid] = 0;
-    else arr[tid] = 1;
+    else arr[tid] = 1.0 / (1 - p);
     return;
     }
 }
@@ -181,17 +182,12 @@ extern "C" {
 
 random_2d_float_func = SourceModule(
     no_extern_c=True,
-    source=random_2d_ker_template % {'p': 'float'}
+    source=random_2d_ker_template % {'p': 'float', 'p_curand': ''}
 ).get_function('random_2d_float_array')
-
-random_2d_int_func = SourceModule(
-    no_extern_c=True,
-    source=random_2d_ker_template % {'p': 'int'}
-).get_function('random_2d_int_array')
 
 random_2d_double_func = SourceModule(
     no_extern_c=True,
-    source=random_2d_ker_template % {'p': 'double'}
+    source=random_2d_ker_template % {'p': 'double', 'p_curand': '_double'}
 ).get_function('random_2d_double_array')
 
 random_lstm_ker_template = """
@@ -556,12 +552,10 @@ def square_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
 
 random_ker = {
     1: {
-        np.int32: random_1d_int_func,
         np.float32: random_1d_float_func,
         np.float64: random_1d_double_func,
     },
     2: {
-        np.int32: random_2d_int_func,
         np.float32: random_2d_float_func,
         np.float64: random_2d_double_func,
     }
@@ -574,10 +568,10 @@ def dropout_mask_gpu(x: gpuarray.GPUArray, p=0.):
     mask = gpuarray.empty_like(x)
     random_func = random_ker[len(x.shape)][x.dtype.type]
     if len(x.shape) == 1:
-        random_func(mask, np.float32(p), block=(x.shape[0], 1, 1), grid=(1, 1, 1))
+        random_func(mask, x.dtype.type(p), block=(x.shape[0], 1, 1), grid=(1, 1, 1))
     else:
         # random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(*x.shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(mask.shape[1]), np.float32(p), block=(32, 32, 1),
+        random_func(mask, np.int32(mask.shape[1]), x.dtype.type(p), block=(32, 32, 1),
                     grid=((x.shape[0] - 1) // 32 + 1, (x.shape[1] - 1) // 32 + 1, 1))
     return mask
 
@@ -587,10 +581,10 @@ def get_mask_gpu(shape, dtype=np.float32, p=0.):
     mask = gpuarray.empty(shape=shape, dtype=dtype)
     random_func = random_ker[len(shape)][dtype]
     if len(shape) == 1:
-        random_func(mask, np.float32(p), block=(shape[0], 1, 1), grid=(1, 1, 1))
+        random_func(mask, dtype(p), block=(shape[0], 1, 1), grid=(1, 1, 1))
     else:
         # random_func(mask, np.int32(shape[1]), np.float32(p), block=(*shape, 1), grid=(1, 1, 1))
-        random_func(mask, np.int32(shape[1]), np.float32(p), block=(32, 32, 1),
+        random_func(mask, np.int32(shape[1]), dtype(p), block=(32, 32, 1),
                     grid=((shape[0] - 1) // 32 + 1, (shape[1] - 1) // 32 + 1, 1))
     return mask
 
@@ -612,16 +606,6 @@ def dropout_mask_lstm_gpu(x: gpuarray.GPUArray, p=0.):
               grid=((x.shape[0] - 1) // 32 + 1, (x.shape[1] - 1) // 32 + 1, 1))
     return mask
 
-
-# def from_one_gpu(x: gpuarray.GPUArray) -> gpuarray.GPUArray:
-#     ctype = 'float' if x.dtype == np.float32 else 'double'
-#     from_one = ElementwiseKernel(
-#         f"{ctype} *Y, {ctype} *x",
-#         "Y[i] = 1.0 - x[i]",
-#         "from_one")
-#     y = pycuda.gpuarray.empty_like(x)
-#     from_one(y, x)
-#     return y
 
 norm_ker = {
     np.int32: norm_int_gpu,
@@ -683,6 +667,135 @@ def bce_with_logits(predicted, target):
     neg_abs_pred = np.where(cond, -predicted, predicted)
 
     return np.add(relu_pred - predicted * target, np.log1p(np.exp(neg_abs_pred)))
+
+
+# adam support func gpu
+adam_mean_float_ker = ElementwiseKernel(
+    arguments="float *out, float *mean, float *grad, float d",
+    operation="""
+    out[i] = d * mean[i] + (1 - d) * grad[i]
+    """,
+    name="adam_mean_float_ker",
+)
+adam_mean_double_ker = ElementwiseKernel(
+    arguments="double *out, double *mean, double *grad, double d",
+    operation="""
+    out[i] = d * mean[i] + (1 - d) * grad[i]
+    """,
+    name="adam_mean_double_ker",
+)
+
+adam_var_float_ker = ElementwiseKernel(
+    arguments="float *out, float *var, float * grad, float d",
+    operation="out[i] = d * var[i] + (1 - d) * grad[i] * grad[i]",
+    name="adam_var_float_ker",
+)
+
+adam_var_double_ker = ElementwiseKernel(
+    arguments="double *out, double *var, double * grad, double d",
+    operation="out[i] = d * var[i] + (1 - d) * grad[i] * grad[i]",
+    name="adam_var_double_ker",
+)
+
+adam_grad_float_ker = ElementwiseKernel(
+    arguments="float *out, float *mean, float *var, float d1_t, float d2_t, float eps",
+    operation="out[i] = (mean[i] / (1 - d1_t)) / (sqrt(var[i] / (1 - d2_t)) + eps)",
+    name="adam_grad_float_ker"
+)
+
+adam_grad_double_ker = ElementwiseKernel(
+    arguments="double *out, double *mean, double *var, double d1_t, double d2_t, double eps",
+    operation="out[i] = (mean[i] / (1 - d1_t)) / (sqrt(var[i] / (1 - d2_t)) + eps)",
+    name="adam_grad_double_ker"
+)
+
+
+def adam_mean(mean: gpuarray.GPUArray, grad: gpuarray.GPUArray, d1, out: gpuarray.GPUArray = None):
+    adam_mean_func = adam_mean_float_ker if mean.dtype == np.float32 else adam_mean_double_ker
+    if out is None:
+        out = gpuarray.empty_like(mean)
+    adam_mean_func(out, mean, grad, mean.dtype.type(d1))
+    return out
+
+
+def adam_var(var: gpuarray.GPUArray, grad: gpuarray.GPUArray, d2, out: gpuarray.GPUArray = None):
+    adam_var_func = adam_var_float_ker if var.dtype == np.float32 else adam_var_double_ker
+    if out is None:
+        out = gpuarray.empty_like(var)
+    adam_var_func(out, var, grad, var.dtype.type(d2))
+    return out
+
+
+def adam_grad(mean: gpuarray.GPUArray, var: gpuarray.GPUArray, d1, d2, eps, t, out: gpuarray.GPUArray = None):
+    adam_grad_func = adam_grad_float_ker if mean.dtype == np.float32 else adam_grad_double_ker
+    if out is None:
+        out = gpuarray.empty_like(var)
+    adam_grad_func(out, mean, var, mean.dtype.type(d1 ** t), mean.dtype.type(d2 ** t), mean.dtype.type(eps))
+    return out
+
+
+# add inplace
+add_inplace_float_ker = ElementwiseKernel(
+    arguments="float *x, float *y",
+    operation="x[i] += y[i]",
+    name="add_inplace_float",
+)
+
+add_inplace_double_ker = ElementwiseKernel(
+    arguments="double *x, double *y",
+    operation="x[i] += y[i]",
+    name="add_inplace_double",
+)
+
+
+def add_(x: gpuarray.GPUArray, y: gpuarray.GPUArray):
+    assert x.shape == y.shape, f"x and y must have same shape"
+    assert x.dtype == y.dtype, f"x and y must have same dtype"
+    add_func = add_inplace_float_ker if x.dtype == np.float32 else add_inplace_double_ker
+    add_func(x, y)
+    return x
+
+
+# sub inplace
+sub_inplace_float_ker = ElementwiseKernel(
+    arguments="float *x, float *y, float c",
+    operation="x[i] -= c * y[i]",
+    name="sub_inplace_float"
+)
+
+sub_inplace_double_ker = ElementwiseKernel(
+    arguments="double *x, double *y, double c",
+    operation="x[i] -= c * y[i]",
+    name="sub_inplace_double"
+)
+
+
+def sub_(x: gpuarray.GPUArray, y: gpuarray.GPUArray, c):
+    assert x.shape == y.shape, f"x and y must have same shape"
+    assert x.dtype == y.dtype, f"x and y must have same dtype"
+    sub_func = sub_inplace_float_ker if x.dtype == np.float32 else sub_inplace_double_ker
+    sub_func(x, y, x.dtype.type(c))
+    return x
+
+
+# zero inplace
+zero_inplace_float_ker = ElementwiseKernel(
+    arguments="float *x",
+    operation="x[i] = 0.0",
+    name="zero_float"
+)
+
+zero_inplace_double_ker = ElementwiseKernel(
+    arguments="double *x",
+    operation="x[i] = 0.0",
+    name="zero_double"
+)
+
+
+def zero_(x: gpuarray.GPUArray):
+    zero_func = zero_inplace_float_ker if x.dtype == np.float32 else zero_inplace_double_ker
+    zero_func(x)
+    return x
 
 
 # CPU Support

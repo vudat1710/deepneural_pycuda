@@ -168,7 +168,7 @@ criterion = CrossEntropyLoss()
 # optimizer = SGD(parameters=model.get_parameters(), lr=settings.LR, beta=0.9)
 optimizer = Adam(
     parameters=model.get_parameters(),
-    lr=0.0012,
+    lr=0.0011,
 )
 
 # train

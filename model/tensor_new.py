@@ -115,7 +115,7 @@ class Tensor:
             if self.grad is None:
                 self.grad = grad
             else:
-                self.grad += grad
+                self.grad.add_(other=grad)
 
             # grads must not have grads of their own
             assert grad.autograd is False
@@ -202,6 +202,19 @@ class Tensor:
             device=self.device,
         )
 
+    def add_(self, other):
+        assert self.device == other.device, f"expect {self.device} assert trigger but {other.device}"
+        assert self.data.shape == other.data.shape or self.shape == () or other.shape == (), f"{self.data.shape} not match {other.data.shape}"
+        if self.device == 'cuda':
+            data = add_(self.data, other.data)
+        else:
+            data = self.data + other.data
+        return Tensor(
+            data=data,
+            device=self.device,
+            autograd=self.autograd
+        )
+
     def __neg__(self):
         if self.autograd:
             return Tensor(
@@ -226,6 +239,19 @@ class Tensor:
             )
         return Tensor(
             data=self.data - other.data,
+            device=self.device,
+        )
+
+    def sub_(self, other):
+        assert self.device == other.device, f"expect {self.device} assert trigger but {other.device}"
+        assert self.data.shape == other.data.shape or self.shape == () or other.shape == (), f"{self.data.shape} not match {other.data.shape}"
+        if self.device == 'cuda':
+            data = sub_(self.data, other.data, 1)
+        else:
+            data = self.data - other.data
+        return Tensor(
+            data=data,
+            autograd=self.autograd,
             device=self.device,
         )
 

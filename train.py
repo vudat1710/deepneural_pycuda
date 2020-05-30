@@ -30,13 +30,11 @@ test_df: pd.DataFrame = load_df(settings.TEST_DF_DUMP)
 dev_df: pd.DataFrame = load_df(settings.DEV_DF_DUMP)
 
 # sampling
-train_df_burst = train_df[train_df['label'] == 'burst']
-train_df_non_burst = train_df[train_df['label'] == 'non-burst']
-
-# expected_len = len(train_df_non_burst) * 3 // 7
-# train_df_burst = pd.concat([train_df_burst] * (expected_len // len(train_df_burst)), ignore_index=True)
-#
-train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * 3.5)), train_df_burst), ignore_index=True))
+if settings.DOWN_SAMPLING:
+    train_df_burst = train_df[train_df['label'] == 'burst']
+    train_df_non_burst = train_df[train_df['label'] == 'non-burst']
+    train_df = shuffle(pd.concat((train_df_non_burst.sample(n=int(len(train_df_burst) * settings.LABEL_RATIO)), train_df_burst),
+                                 ignore_index=True))
 
 # print(len(train_df[train_df['label'] == 'burst']))
 # print(len(train_df[train_df['label'] == 'non-burst']))
@@ -157,10 +155,10 @@ model = RedditModel(
     user_embedding=user_embedding,
     sub_embedding=sub_embedding,
     word_embedding=word_embedding,
-    hidden_dim=64,
+    hidden_dim=settings.HIDDEN_DIM,
     output_dim=len(label_vocab),
     device=settings.DEVICE,
-    p_dropout=0.1,
+    p_dropout=settings.P_DROPOUT,
 )
 
 criterion = CrossEntropyLoss()
@@ -169,6 +167,7 @@ criterion = CrossEntropyLoss()
 optimizer = Adam(
     parameters=model.get_parameters(),
     lr=settings.LR,
+    lr_scheduler=None,
 )
 
 # train
@@ -180,6 +179,7 @@ for epoch in epoch_bar:
     total_train_loss = 0
     model.train()
     train_batch_bar = tqdm(train_dl, position=1)
+    optimizer.lr_update()
     for i, (x, y) in enumerate(train_batch_bar):
         output = model(x)
         loss = criterion(output, target=y)

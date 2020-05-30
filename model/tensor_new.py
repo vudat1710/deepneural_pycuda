@@ -804,6 +804,7 @@ class Adam:
         self.clip_norm = clip_norm
         self.lr_scheduler = lr_scheduler
         self.cache = {}
+        self.epoch = 0
 
     def zero(self):
         for p in self.parameters:
@@ -857,6 +858,11 @@ class Adam:
                 p.data -= self.lr * grad
                 if zero:
                     p.grad.data *= 0
+
+    def lr_update(self):
+        if self.lr_scheduler is not None:
+            self.lr = self.lr_scheduler(self.lr, self.epoch)
+        self.epoch += 1
 
 
 class Linear(Layer):

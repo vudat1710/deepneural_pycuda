@@ -24,6 +24,8 @@ TEST_DF_DUMP = 'data/dump/test_data.pkl'
 DEV_DF_DUMP = 'data/dump/dev_data.pkl'
 
 # batch_size
+DOWN_SAMPLING = True
+LABEL_RATIO = 3.5
 TRAIN_BS = 512
 TEST_BS = 512
 DEV_BS = 512
@@ -32,7 +34,11 @@ DEV_BS = 512
 DEVICE = 'cuda'
 
 # num epochs
-NUM_EPOCHS = 1
+NUM_EPOCHS = 10
 
 # learning rate
-LR = 0.0011
+LR = 0.001
+
+# model
+HIDDEN_DIM = 128
+P_DROPOUT = 0.2
